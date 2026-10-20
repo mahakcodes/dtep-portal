@@ -1,0 +1,46 @@
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Django local database and generated files
+*.sqlite3
+*.sqlite3-*
+media/
+staticfiles/
+
+# Node.js and Vite
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
+__MACOSX/
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Test and coverage output
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Local AI editor project notes
+.trae/

@@ -1,0 +1,215 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Inter', 'Sora', system-ui, -apple-system, sans-serif;
+  background-color: #F4F7FA;
+  color: #0F172A;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'ss01', 'cv11';
+}
+
+::selection {
+  background-color: #2563EB;
+  color: #FFFFFF;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #FAF9F6;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #DEDACE;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #5C5A52;
+}
+
+*:focus-visible {
+  outline: 2px solid #1F4A3D;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+@layer components {
+  .section-divider {
+    @apply flex items-center gap-3 my-8;
+  }
+
+  .section-divider::before,
+  .section-divider::after {
+    content: '';
+    @apply flex-1 h-px bg-hairline;
+  }
+
+  .section-divider::before {
+    @apply bg-gradient-to-r from-transparent to-hairline;
+  }
+
+  .section-divider::after {
+    @apply bg-gradient-to-l from-transparent to-hairline;
+  }
+
+  .section-tick {
+    @apply inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-slate;
+  }
+
+  .section-tick::before,
+  .section-tick::after {
+    content: '';
+  }
+
+  .section-tick::before {
+    content: '';
+    @apply block h-px w-8 bg-hairline;
+  }
+
+  .section-tick::after {
+    content: '';
+    @apply block w-1.5 h-1.5 rounded-full bg-forest;
+  }
+
+  .hairline-border {
+    @apply border border-hairline;
+  }
+
+  .card {
+    @apply rounded-xl border border-slate-200 bg-white shadow-sm;
+  }
+
+  .card-paper {
+    @apply rounded-xl border border-slate-200 bg-white shadow-sm;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-blue-700 active:scale-[0.98];
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all duration-200 hover:bg-slate-50 active:scale-[0.98];
+  }
+
+  .btn-brass {
+    @apply inline-flex items-center justify-center gap-2 rounded-md bg-brass px-4 py-2.5 text-sm font-semibold text-paper transition-all duration-200 hover:bg-[#8a6a2f] active:scale-[0.98];
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-slate transition-all duration-200 hover:bg-ivory hover:text-ink;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-md hairline-border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider;
+  }
+
+  .chip-success {
+    @apply chip bg-emerald-50 text-emerald-700 border-emerald-200;
+  }
+
+  .chip-error {
+    @apply chip bg-rose-50 text-rose-700 border-rose-200;
+  }
+
+  .chip-forest {
+    @apply chip bg-blue-50 text-blue-700 border-blue-200;
+  }
+
+  .chip-brass {
+    @apply chip bg-amber-50 text-amber-700 border-amber-200;
+  }
+
+  .chip-slate {
+    @apply chip bg-ivory text-slate border-hairline;
+  }
+
+  .input-base {
+    @apply w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition-all duration-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100;
+  }
+
+  .input-valid {
+    @apply border-success/50 bg-success/5 focus:border-success/70 focus:ring-success/15;
+  }
+
+  .input-error {
+    @apply border-error/50 bg-error/5 focus:border-error/70 focus:ring-error/15;
+  }
+
+  .table-academic {
+    @apply w-full text-left;
+  }
+
+  .table-academic thead tr {
+    @apply bg-ivory/70;
+  }
+
+  .table-academic th {
+    @apply px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate;
+  }
+
+  .table-academic td {
+    @apply px-5 py-4 text-sm text-ink border-t border-hairline/60;
+  }
+
+  .table-academic tbody tr {
+    @apply transition-colors hover:bg-ivory/40;
+  }
+
+  .progress-hairline {
+    @apply flex items-center gap-1.5;
+  }
+
+  .progress-hairline::before {
+    content: '';
+    @apply flex-1 h-px bg-hairline;
+  }
+
+  .progress-hairline::after {
+    content: '';
+    @apply block w-1.5 h-1.5 rounded-full bg-forest;
+  }
+
+  .nav-pill {
+    @apply relative flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium text-slate-600 transition-all duration-200 hover:text-blue-700 hover:bg-blue-50;
+  }
+
+  .nav-pill-active {
+    @apply text-blue-700 bg-blue-50 font-semibold;
+  }
+
+  .nav-pill-active::before {
+    content: '';
+    @apply absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-blue-600;
+  }
+
+  .mono {
+    @apply font-mono;
+  }
+
+  .mono-num {
+    @apply font-mono tabular-nums;
+  }
+}
