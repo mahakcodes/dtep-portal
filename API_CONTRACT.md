@@ -21,28 +21,25 @@ Response: { "submission_id": 55, "score": 10, "total_marks": 10, "percentage": 1
 GET /api/submissions/<submission_id>/result/ (Headers: Authorization Bearer <token>)
 Response: { "submission_id": 55, "test_title": "Math Quiz", "score": 10, "total_marks": 10, "percentage": 100.0, "time_taken_seconds": 600, "details": [ { "question_id": 101, "question_text": "What is 2+2?", "user_selected_option_id": 2, "correct_option_id": 2, "is_correct": true } ] }
 
-## Coding questions (draft, free browser-based grading)
+## Coding questions (free, browser-based grading)
 
-Normalization rule (used by BOTH backend and frontend): replace \r\n with \n,
+Languages: python, javascript.
+Normalization (used by BOTH backend and frontend): replace \r\n with \n,
 strip trailing spaces on every line, strip trailing newlines at the end.
-Hash = SHA-256 (hex) of the normalized text.
+Hash = SHA-256 hex of the normalized text.
+Test vectors:
+normalize("a \r\nb\n\n") == "a\nb"
+sha256("a\nb") == 7e18f737311b2dc3b2f269dd78396b0351f14fb66efa879f768cb23181883c78
+sha256(normalize("8\n")) == 2c624232cdd221771294dfbb310aca000a0df6ac8b66b696d90ef06fdefb64a3
 
 POST /api/coding/questions/ (Teacher)
-body: {title, statement, starter_code:{python,javascript}, languages,
-marks, test_cases:[{input, expected_output, is_hidden, marks}]}
-
-GET /api/coding/questions/{id}/ (Student)
-Returns visible test cases only (input + expected_output). No hidden data.
-
-GET /api/coding/questions/{id}/grading-cases/?attempt_id=... (Student)
-Only for the student's own active attempt of an assigned test.
-Returns ALL cases: [{id, input, is_hidden, expected_output (visible cases only),
-expected_hash (hidden cases only)}]
-
+{title, statement, starter_code:{python,javascript}, languages, marks,
+test_cases:[{input, expected_output, is_hidden, marks}]}
+GET /api/coding/questions/{id}/ (Student): visible cases only.
+GET /api/coding/questions/{id}/grading-cases/?attempt_id=... (Student, own active attempt)
+[{id, input, is_hidden, expected_output (visible only), expected_hash (hidden only)}]
 POST /api/coding/submissions/ (Student)
-body: {question_id, attempt_id, language, source_code,
-case_results:[{case_id, passed, status}]}
-status per case: ok | wrong | runtime_error | timeout
-Server validates the attempt and case ids, computes the score itself from
-case weights, saves the code and results.
-response: {status, score, max_score, passed, total, cases:[{index, passed}]}
+{question_id, attempt_id, language, source_code,
+case_results:[{case_id, passed, status}]} status: ok|wrong|runtime_error|timeout
+-> {status, score, max_score, passed, total, cases:[{index, passed}]}
+Score is computed on the server from case weights. Grading is done by the browser.
