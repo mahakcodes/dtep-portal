@@ -171,6 +171,7 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'autosave': '60/min',
         'violation': '30/min',
+        'coding_submission': '30/min',
     },
 }
 

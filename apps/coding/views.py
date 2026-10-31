@@ -3,15 +3,18 @@ from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.evaluations.models import AttemptStatus
 from apps.tests.models import Test
 from apps.users.permissions import IsEvaluatorUserRole, IsStudentUserRole
 
-from .models import CodingQuestion, CodingTestCase
+from .models import CodingQuestion, CodingSubmission, CodingTestCase
 from .serializers import (
     CodingTestQuestionListSerializer,
+    CodingSubmissionCreateSerializer,
+    CodingSubmissionResponseSerializer,
     GradingAttemptQuerySerializer,
     GradingCaseSerializer,
     StudentCodingQuestionSerializer,
@@ -65,6 +68,17 @@ class CodingQuestionDetailView(APIView):
 
     def patch(self, request, pk):
         question = self._teacher_question(request, pk)
+        if 'test_id' in request.data:
+            return Response(
+                {'test_id': 'A coding question cannot be moved to another test.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        locked_fields = {'test_cases', 'max_marks', 'allowed_languages'}
+        if locked_fields.intersection(request.data.keys()) and CodingSubmission.objects.filter(question=question).exists():
+            return Response(
+                {'detail': 'Test cases, max_marks, and allowed_languages cannot be changed after a submission exists.'},
+                status=status.HTTP_409_CONFLICT,
+            )
         serializer = TeacherCodingQuestionSerializer(
             question,
             data=request.data,
@@ -117,3 +131,15 @@ class CodingGradingCasesView(APIView):
             raise PermissionDenied('This coding question is not part of the attempt.')
         cases = CodingTestCase.objects.filter(question=question).order_by('order', 'id')
         return Response(GradingCaseSerializer(cases, many=True).data)
+
+
+class CodingSubmissionCreateView(APIView):
+    permission_classes = (IsAuthenticated, IsStudentUserRole)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'coding_submission'
+
+    def post(self, request):
+        serializer = CodingSubmissionCreateSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        submission = serializer.save()
+        return Response(CodingSubmissionResponseSerializer(submission).data, status=status.HTTP_201_CREATED)

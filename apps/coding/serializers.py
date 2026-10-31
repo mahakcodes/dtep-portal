@@ -1,10 +1,10 @@
 from rest_framework import serializers
+from django.db import transaction
 
 from apps.evaluations.models import AttemptStatus, TestAttempt
 from apps.tests.models import Test
-from django.db import transaction
 
-from .models import CodingQuestion, CodingTestCase
+from .models import CodingQuestion, CodingSubmission, CodingTestCase
 from .utils import normalize_output, sha256_hex
 
 
@@ -72,6 +72,8 @@ class TeacherCodingQuestionSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         replacing_cases = 'test_cases' in attrs
+        if self.instance is not None and 'test_id' in attrs:
+            raise serializers.ValidationError({'test_id': 'A coding question cannot be moved to another test.'})
         if self.instance is None:
             if 'test_id' not in attrs:
                 raise serializers.ValidationError({'test_id': 'This field is required.'})
@@ -80,6 +82,8 @@ class TeacherCodingQuestionSerializer(serializers.ModelSerializer):
 
         cases = attrs.get('test_cases')
         if replacing_cases:
+            if len(cases) > 50:
+                raise serializers.ValidationError({'test_cases': 'A coding question can have at most 50 test cases.'})
             if not cases:
                 raise serializers.ValidationError({'test_cases': 'At least one visible and one hidden case are required.'})
             if not any(not case['is_hidden'] for case in cases) or not any(case['is_hidden'] for case in cases):
@@ -174,6 +178,141 @@ class CodingTestQuestionListSerializer(serializers.ModelSerializer):
 class CodingSubmissionInputSerializer(serializers.Serializer):
     language = serializers.ChoiceField(choices=ALLOWED_LANGUAGES)
     source_code = serializers.CharField(max_length=MAX_CODE_LENGTH, trim_whitespace=False)
+
+
+class CodingCaseResultInputSerializer(serializers.Serializer):
+    case_id = serializers.IntegerField()
+    passed = serializers.BooleanField()
+    status = serializers.ChoiceField(choices=('ok', 'wrong', 'runtime_error', 'timeout'))
+
+
+class CodingSubmissionCreateSerializer(CodingSubmissionInputSerializer):
+    question_id = serializers.IntegerField()
+    attempt_id = serializers.IntegerField()
+    case_results = CodingCaseResultInputSerializer(many=True)
+
+    def validate(self, attrs):
+        request = self.context['request']
+        student = request.user
+        question = CodingQuestion.objects.filter(
+            pk=attrs['question_id'],
+            is_published=True,
+            test__is_published=True,
+        ).select_related('test').first()
+        if not question:
+            raise serializers.ValidationError({'question_id': 'Question or test is not published.'})
+        if attrs['language'] not in question.allowed_languages:
+            raise serializers.ValidationError({'language': 'This language is not allowed for the question.'})
+
+        attempt = TestAttempt.objects.filter(pk=attrs['attempt_id'], student=student).select_related(
+            'test', 'test__created_by'
+        ).first()
+        if not attempt:
+            raise serializers.ValidationError({'attempt_id': 'Invalid attempt_id.'})
+        if attempt.status not in (AttemptStatus.IN_PROGRESS, AttemptStatus.STARTED):
+            raise serializers.ValidationError({'attempt_id': 'Attempt is not active.'})
+        if attempt.test_id != question.test_id:
+            raise serializers.ValidationError({'attempt_id': 'This question is not part of the attempt test.'})
+        if not student.assigned_teachers.filter(pk=attempt.test.created_by_id).exists():
+            raise serializers.ValidationError({'attempt_id': 'This test is not assigned to you.'})
+
+        if attempt.test.duration_minutes:
+            from datetime import timedelta
+            from django.utils import timezone
+            deadline = attempt.started_at + timedelta(minutes=attempt.test.duration_minutes, seconds=30)
+            if timezone.now() > deadline:
+                raise serializers.ValidationError({'attempt_id': 'Attempt has expired.'})
+
+        cases = list(question.test_cases.all().order_by('order', 'id'))
+        results = attrs['case_results']
+        case_ids = [result['case_id'] for result in results]
+        expected_ids = {case.id for case in cases}
+        if len(case_ids) != len(set(case_ids)):
+            raise serializers.ValidationError({'case_results': 'Duplicate case_id values are not allowed.'})
+        if set(case_ids) != expected_ids:
+            raise serializers.ValidationError({'case_results': 'Provide exactly one result for every question case.'})
+        for result in results:
+            if result['passed'] and result['status'] != 'ok':
+                raise serializers.ValidationError(
+                    {'case_results': 'A passed case must have status "ok".'}
+                )
+
+        result_by_id = {result['case_id']: result for result in results}
+        ordered_results = [
+            {'case_id': case.id, **result_by_id[case.id]}
+            for case in cases
+        ]
+        passed = sum(result['passed'] for result in ordered_results)
+        if passed == len(cases):
+            overall_status = CodingSubmission.Status.ACCEPTED
+        elif passed:
+            overall_status = CodingSubmission.Status.PARTIAL
+        elif any(result['status'] == 'timeout' for result in ordered_results):
+            overall_status = CodingSubmission.Status.TIMEOUT
+        elif any(result['status'] == 'runtime_error' for result in ordered_results):
+            overall_status = CodingSubmission.Status.RUNTIME_ERROR
+        else:
+            overall_status = CodingSubmission.Status.WRONG
+
+        all_case_marks = sum(case.marks for case in cases)
+        if not all_case_marks:
+            raise serializers.ValidationError({'case_results': 'Question test cases must have positive total weight.'})
+        passed_marks = sum(
+            case.marks for case in cases if result_by_id[case.id]['passed']
+        )
+        attrs.update({
+            'question': question,
+            'attempt': attempt,
+            'ordered_case_results': ordered_results,
+            'passed_count': passed,
+            'total_count': len(cases),
+            'overall_status': overall_status,
+            'max_score': float(question.max_marks),
+            'score': question.max_marks * passed_marks / all_case_marks,
+        })
+        return attrs
+
+    def create(self, validated_data):
+        validated_data.pop('question_id')
+        validated_data.pop('attempt_id')
+        validated_data.pop('case_results')
+        question = validated_data.pop('question')
+        attempt = validated_data.pop('attempt')
+        case_results = validated_data.pop('ordered_case_results')
+        passed_count = validated_data.pop('passed_count')
+        total_count = validated_data.pop('total_count')
+        overall_status = validated_data.pop('overall_status')
+        score = validated_data.pop('score')
+        max_score = validated_data.pop('max_score')
+        return CodingSubmission.objects.create(
+            student=self.context['request'].user,
+            question=question,
+            attempt=attempt,
+            case_results=case_results,
+            passed_count=passed_count,
+            total_count=total_count,
+            status=overall_status,
+            score=score,
+            max_score=max_score,
+            graded_by='browser',
+            **validated_data,
+        )
+
+
+class CodingSubmissionResponseSerializer(serializers.ModelSerializer):
+    passed = serializers.IntegerField(source='passed_count', read_only=True)
+    total = serializers.IntegerField(source='total_count', read_only=True)
+    cases = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CodingSubmission
+        fields = ('status', 'score', 'max_score', 'passed', 'total', 'cases')
+
+    def get_cases(self, obj):
+        return [
+            {'index': index, 'passed': case_result['passed']}
+            for index, case_result in enumerate(obj.case_results)
+        ]
 
 
 class GradingAttemptQuerySerializer(serializers.Serializer):
