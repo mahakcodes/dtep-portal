@@ -15,8 +15,11 @@ from .serializers import (
     CodingTestQuestionListSerializer,
     CodingSubmissionCreateSerializer,
     CodingSubmissionResponseSerializer,
+    AttemptSubmissionsQuerySerializer,
     GradingAttemptQuerySerializer,
     GradingCaseSerializer,
+    StudentCodingSubmissionHistorySerializer,
+    TeacherCodingQuestionSubmissionSerializer,
     StudentCodingQuestionSerializer,
     TeacherCodingQuestionSerializer,
 )
@@ -138,8 +141,34 @@ class CodingSubmissionCreateView(APIView):
     throttle_classes = (ScopedRateThrottle,)
     throttle_scope = 'coding_submission'
 
+    def get(self, request):
+        query_serializer = AttemptSubmissionsQuerySerializer(
+            data=request.query_params,
+            context={'request': request},
+        )
+        query_serializer.is_valid(raise_exception=True)
+        attempt = query_serializer.context['attempt']
+        submissions = CodingSubmission.objects.filter(attempt=attempt).order_by('-created_at', '-id')
+        latest_by_question = {}
+        for submission in submissions:
+            latest_by_question.setdefault(submission.question_id, submission)
+        return Response(StudentCodingSubmissionHistorySerializer(latest_by_question.values(), many=True).data)
+
     def post(self, request):
         serializer = CodingSubmissionCreateSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         submission = serializer.save()
         return Response(CodingSubmissionResponseSerializer(submission).data, status=status.HTTP_201_CREATED)
+
+
+class TeacherCodingQuestionSubmissionsView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, pk):
+        if not IsEvaluatorUserRole().has_permission(request, self):
+            raise PermissionDenied('Teacher access is required.')
+        question = get_object_or_404(CodingQuestion, pk=pk, owner=request.user)
+        submissions = CodingSubmission.objects.filter(question=question).select_related('student').order_by(
+            '-created_at', '-id'
+        )[:200]
+        return Response(TeacherCodingQuestionSubmissionSerializer(submissions, many=True).data)

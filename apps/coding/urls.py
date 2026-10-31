@@ -6,6 +6,7 @@ from .views import (
     CodingQuestionListCreateView,
     CodingSubmissionCreateView,
     CodingTestQuestionsListView,
+    TeacherCodingQuestionSubmissionsView,
 )
 
 urlpatterns = [
@@ -13,5 +14,6 @@ urlpatterns = [
     path('questions/<int:pk>/', CodingQuestionDetailView.as_view(), name='coding-question-detail'),
     path('questions/<int:pk>/grading-cases/', CodingGradingCasesView.as_view(), name='coding-question-grading-cases'),
     path('submissions/', CodingSubmissionCreateView.as_view(), name='coding-submissions-create'),
+    path('questions/<int:pk>/submissions/', TeacherCodingQuestionSubmissionsView.as_view(), name='coding-question-submissions'),
     path('tests/<int:test_id>/questions/', CodingTestQuestionsListView.as_view(), name='coding-test-questions-list'),
 ]

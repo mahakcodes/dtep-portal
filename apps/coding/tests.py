@@ -251,6 +251,11 @@ class CodingQuestionAPITests(APITestCase):
         self.assertEqual(response.data[1]['expected_hash'], sha256_hex(normalize_output(hidden.expected_output)))
         self.assertNotIn('expected_output', response.data[1])
 
+        attempt.started_at = timezone.now() - timedelta(minutes=30, seconds=20)
+        attempt.save(update_fields=['started_at'])
+        within_grace = self.client.get(url)
+        self.assertEqual(within_grace.status_code, 200, within_grace.data)
+
         attempt.started_at = timezone.now() - timedelta(minutes=31)
         attempt.save(update_fields=['started_at'])
         self.assertEqual(self.client.get(url).status_code, 400)
@@ -470,3 +475,172 @@ class CodingQuestionAPITests(APITestCase):
         self.assertEqual(scoring['total_questions'], 1)
         self.assertIsInstance(Result._meta.get_field('score'), FloatField)
         self.assertIsInstance(Result._meta.get_field('max_score'), FloatField)
+
+    def test_student_submission_history_returns_latest_per_question_for_submitted_attempt(self):
+        question = self.create_question()
+        other_question = self.create_question()
+        attempt = TestAttempt.objects.create(test=self.test, student=self.student, status=AttemptStatus.SUBMITTED)
+        old = CodingSubmission.objects.create(
+            student=self.student, question=question, attempt=attempt, language='python', source_code='old',
+            status=CodingSubmission.Status.WRONG, score=0, max_score=10, passed_count=0, total_count=2,
+            case_results=[{'case_id': 1, 'passed': False, 'status': 'wrong'}],
+        )
+        latest = CodingSubmission.objects.create(
+            student=self.student, question=question, attempt=attempt, language='javascript', source_code='new',
+            status=CodingSubmission.Status.PARTIAL, score=2, max_score=10, passed_count=1, total_count=2,
+            case_results=[{'case_id': 1, 'passed': True, 'status': 'ok'}, {'case_id': 2, 'passed': False, 'status': 'wrong'}],
+        )
+        other_latest = CodingSubmission.objects.create(
+            student=self.student, question=other_question, attempt=attempt, language='python', source_code='other',
+            status=CodingSubmission.Status.ACCEPTED, score=10, max_score=10, passed_count=2, total_count=2,
+            case_results=[{'case_id': 3, 'passed': True, 'status': 'ok'}],
+        )
+        self.client.force_authenticate(self.student)
+        response = self.client.get(f'/api/coding/submissions/?attempt_id={attempt.id}')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(len(response.data), 2)
+        self.assertEqual(response.data[0]['question_id'], other_question.id)
+        latest_row = next(row for row in response.data if row['question_id'] == question.id)
+        self.assertEqual(latest_row['status'], 'partial')
+        self.assertEqual(latest_row['source_code'], 'new')
+        self.assertEqual(latest_row['cases'], [{'index': 0, 'passed': True}, {'index': 1, 'passed': False}])
+        self.assertNotIn(old.id, [row.get('id') for row in response.data])
+        self.assertEqual(response.data[0]['question_id'], other_latest.question_id)
+
+    def test_submission_history_permissions_hide_other_students_attempt(self):
+        attempt = TestAttempt.objects.create(test=self.test, student=self.student)
+        self.client.force_authenticate(self.unassigned_student)
+        self.assertEqual(
+            self.client.get(f'/api/coding/submissions/?attempt_id={attempt.id}').status_code,
+            404,
+        )
+        self.client.force_authenticate(self.teacher)
+        self.assertEqual(
+            self.client.get(f'/api/coding/submissions/?attempt_id={attempt.id}').status_code,
+            403,
+        )
+
+    def test_teacher_question_submissions_permissions_ordering_and_limit(self):
+        question = self.create_question()
+        attempt = TestAttempt.objects.create(test=self.test, student=self.student)
+        submissions = [
+            CodingSubmission(
+                student=self.student, question=question, attempt=attempt, language='python',
+                source_code=f'print({index})', status=CodingSubmission.Status.ACCEPTED,
+                score=10, max_score=10, passed_count=2, total_count=2,
+                case_results=[{'case_id': 1, 'passed': True, 'status': 'ok'}], graded_by='browser',
+            )
+            for index in range(201)
+        ]
+        CodingSubmission.objects.bulk_create(submissions)
+        self.client.force_authenticate(self.teacher)
+        url = f'/api/coding/questions/{question.id}/submissions/'
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(len(response.data), 200)
+        self.assertEqual(response.data[0]['id'], max(item.id for item in submissions))
+        self.assertEqual(set(response.data[0]), {
+            'id', 'student', 'attempt_id', 'status', 'score', 'max_score', 'passed', 'total',
+            'cases', 'language', 'source_code', 'graded_by', 'created_at',
+        })
+        self.assertEqual(response.data[0]['student'], {'id': self.student.id, 'username': self.student.username})
+
+        self.client.force_authenticate(self.other_teacher)
+        self.assertEqual(self.client.get(url).status_code, 404)
+        self.client.force_authenticate(self.student)
+        self.assertEqual(self.client.get(url).status_code, 403)
+
+    def create_test_through_teacher_api(self, title, questions=None):
+        self.client.force_authenticate(self.teacher)
+        response = self.client.post('/api/tests/', {
+            'title': title,
+            'test_type': 'CODING',
+            'is_published': True,
+            'questions': questions or [],
+        }, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        return AssessmentTest.objects.get(pk=response.data['id'])
+
+    def add_coding_question(self, test, *, published=True, max_marks=10):
+        question = CodingQuestion.objects.create(
+            test=test,
+            owner=self.teacher,
+            title='Coding only',
+            statement='Return the input.',
+            starter_code={'python': ''},
+            allowed_languages=['python'],
+            max_marks=max_marks,
+            is_published=published,
+        )
+        visible = CodingTestCase.objects.create(
+            question=question, input_data='1', expected_output='1', is_hidden=False, marks=2, order=0,
+        )
+        hidden = CodingTestCase.objects.create(
+            question=question, input_data='2', expected_output='2', is_hidden=True, marks=8, order=1,
+        )
+        return question, visible, hidden
+
+    def start_test(self, test):
+        self.client.force_authenticate(self.student)
+        response = self.client.post('/api/evaluations/start/', {'test_id': test.id}, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        return TestAttempt.objects.get(pk=response.data['id'])
+
+    def post_coding_result(self, question, attempt, passed_ids):
+        case_results = [
+            {'case_id': case.id, 'passed': case.id in passed_ids,
+             'status': 'ok' if case.id in passed_ids else 'wrong'}
+            for case in question.test_cases.order_by('order')
+        ]
+        response = self.client.post('/api/coding/submissions/', {
+            'question_id': question.id,
+            'attempt_id': attempt.id,
+            'language': 'python',
+            'source_code': 'print(input())',
+            'case_results': case_results,
+        }, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        return response
+
+    def test_published_coding_only_test_starts_and_scores_through_existing_submit(self):
+        test = self.create_test_through_teacher_api('Only coding')
+        self.assertTrue(test.is_published)
+        question, visible, hidden = self.add_coding_question(test, max_marks=9)
+        attempt = self.start_test(test)
+        self.post_coding_result(question, attempt, {visible.id, hidden.id})
+
+        submitted = self.client.post('/api/evaluations/submit/', {'attempt_id': attempt.id}, format='json')
+        self.assertEqual(submitted.status_code, 200, submitted.data)
+        self.assertEqual(submitted.data['score'], 9)
+        self.assertEqual(submitted.data['max_score'], 9)
+        result = Result.objects.get(attempt=attempt)
+        self.assertEqual(result.score, 9)
+        self.assertEqual(result.max_score, 9)
+
+    def test_mixed_mcq_and_coding_test_totals_and_unpublished_coding_is_excluded(self):
+        test = self.create_test_through_teacher_api('Mixed', questions=[{
+            'text': 'What is 2 + 2?',
+            'question_type': 'MCQ',
+            'marks': 5,
+            'options': [
+                {'text': '4', 'is_correct': True},
+                {'text': '5', 'is_correct': False},
+            ],
+        }])
+        question, visible, _hidden = self.add_coding_question(test, max_marks=10)
+        self.add_coding_question(test, published=False, max_marks=100)
+        attempt = self.start_test(test)
+        self.post_coding_result(question, attempt, {visible.id})
+        mcq = test.questions.get(question_type=QuestionType.MCQ)
+        correct_option = mcq.options.get(is_correct=True)
+
+        submitted = self.client.post(f'/api/tests/{test.id}/submit/', {
+            'answers': [{'question_id': mcq.id, 'selected_option_id': correct_option.id}],
+        }, format='json')
+        self.assertEqual(submitted.status_code, 200, submitted.data)
+        # MCQ contributes 5/5 and coding contributes 2/10; the unpublished coding item adds nothing.
+        self.assertEqual(submitted.data['score'], 7)
+        self.assertEqual(submitted.data['total_marks'], 15)
+        result = Result.objects.get(attempt=attempt)
+        self.assertEqual(result.score, 7)
+        self.assertEqual(result.max_score, 15)

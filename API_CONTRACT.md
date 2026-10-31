@@ -210,6 +210,59 @@ Errors: field and validation errors return `400 Bad Request` as field-name array
 
 The exact non-student permission response is `403 Forbidden`, `{"detail":"You do not have permission to perform this action."}`. Other field validation errors (including invalid language and oversized source) use `400 Bad Request` with the relevant field name and an array of messages.
 
+### List the current student's coding submissions for an attempt
+
+`GET /api/coding/submissions/?attempt_id={attempt_id}` — Student only. The attempt must belong to the caller. Any attempt status is allowed, including `SUBMITTED` and `TERMINATED`; this endpoint does not require the test to remain published or assigned. Request body: none. Example request: `GET /api/coding/submissions/?attempt_id=77`.
+
+The response contains the latest submission per coding question for that attempt, ordered newest submission first:
+
+```json
+[
+  {
+    "question_id": 31,
+    "status": "partial",
+    "score": 2.0,
+    "max_score": 10.0,
+    "passed": 1,
+    "total": 2,
+    "cases": [{"index": 0, "passed": true}, {"index": 1, "passed": false}],
+    "language": "python",
+    "source_code": "print(sum(map(int, input().split())))",
+    "created_at": "2026-10-31T05:40:00Z"
+  }
+]
+```
+
+Success: `200 OK`; an attempt with no coding submissions returns `[]`. A missing or invalid `attempt_id` returns `400 Bad Request` with a field error such as `{"attempt_id":["A valid integer is required."]}`. An attempt owned by another student or an unknown attempt returns `404 Not Found`, `{"detail":"Attempt not found."}`. A non-student gets `403 Forbidden`, `{"detail":"You do not have permission to perform this action."}`; unauthenticated requests get `401 Unauthorized`. GET and POST on `/api/coding/submissions/` share the `coding_submission` limit of 30 requests per minute.
+
+### List all submissions for a teacher's coding question
+
+`GET /api/coding/questions/{id}/submissions/` — Owning teacher only (roles `TEACHER` and `EVALUATOR`). Request body: none. Example request: `GET /api/coding/questions/31/submissions/`.
+
+Success: `200 OK`. Returns up to 200 submissions, newest first, with these fields: `id`, `student` (`id`, `username`), `attempt_id`, `status`, `score`, `max_score`, `passed`, `total`, `cases` (`index`, `passed`), `language`, `source_code`, `graded_by`, and `created_at`.
+
+```json
+[
+  {
+    "id": 202,
+    "student": {"id": 8, "username": "student1"},
+    "attempt_id": 77,
+    "status": "partial",
+    "score": 2.0,
+    "max_score": 10.0,
+    "passed": 1,
+    "total": 2,
+    "cases": [{"index": 0, "passed": true}, {"index": 1, "passed": false}],
+    "language": "python",
+    "source_code": "print(sum(map(int, input().split())))",
+    "graded_by": "browser",
+    "created_at": "2026-10-31T05:40:00Z"
+  }
+]
+```
+
+A question not owned by the teacher (including an unknown question ID) returns `404 Not Found`, `{"detail":"Not found."}`. A non-teacher gets `403 Forbidden`, `{"detail":"Teacher access is required."}`; unauthenticated requests get `401 Unauthorized`.
+
 ### Output normalization and hidden-case hashes
 
 Normalization replaces CRLF (`\r\n`) with LF (`\n`), strips only the space character U+0020 from the end of each line, and strips trailing LF characters at the end. Tabs at line ends are kept, and a lone `\r` is left untouched. Hash = lowercase SHA-256 hex of the normalized UTF-8 text.

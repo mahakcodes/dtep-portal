@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.exceptions import NotFound
 from django.db import transaction
 
 from apps.evaluations.models import AttemptStatus, TestAttempt
@@ -315,6 +316,65 @@ class CodingSubmissionResponseSerializer(serializers.ModelSerializer):
         ]
 
 
+class AttemptSubmissionsQuerySerializer(serializers.Serializer):
+    attempt_id = serializers.IntegerField()
+
+    def validate_attempt_id(self, value):
+        attempt = TestAttempt.objects.filter(
+            pk=value,
+            student=self.context['request'].user,
+        ).first()
+        if not attempt:
+            raise NotFound('Attempt not found.')
+        self.context['attempt'] = attempt
+        return value
+
+
+class StudentCodingSubmissionHistorySerializer(serializers.ModelSerializer):
+    passed = serializers.IntegerField(source='passed_count', read_only=True)
+    total = serializers.IntegerField(source='total_count', read_only=True)
+    cases = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CodingSubmission
+        fields = (
+            'question_id', 'status', 'score', 'max_score', 'passed', 'total',
+            'cases', 'language', 'source_code', 'created_at',
+        )
+
+    def get_cases(self, obj):
+        return [
+            {'index': index, 'passed': case_result['passed']}
+            for index, case_result in enumerate(obj.case_results)
+        ]
+
+
+class SubmissionStudentSerializer(serializers.Serializer):
+    id = serializers.IntegerField(read_only=True)
+    username = serializers.CharField(read_only=True)
+
+
+class TeacherCodingQuestionSubmissionSerializer(serializers.ModelSerializer):
+    student = SubmissionStudentSerializer(read_only=True)
+    attempt_id = serializers.IntegerField(read_only=True)
+    passed = serializers.IntegerField(source='passed_count', read_only=True)
+    total = serializers.IntegerField(source='total_count', read_only=True)
+    cases = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CodingSubmission
+        fields = (
+            'id', 'student', 'attempt_id', 'status', 'score', 'max_score', 'passed',
+            'total', 'cases', 'language', 'source_code', 'graded_by', 'created_at',
+        )
+
+    def get_cases(self, obj):
+        return [
+            {'index': index, 'passed': case_result['passed']}
+            for index, case_result in enumerate(obj.case_results)
+        ]
+
+
 class GradingAttemptQuerySerializer(serializers.Serializer):
     attempt_id = serializers.IntegerField()
 
@@ -330,7 +390,7 @@ class GradingAttemptQuerySerializer(serializers.Serializer):
         if attempt.test.duration_minutes:
             from datetime import timedelta
             from django.utils import timezone
-            deadline = attempt.started_at + timedelta(minutes=attempt.test.duration_minutes)
+            deadline = attempt.started_at + timedelta(minutes=attempt.test.duration_minutes, seconds=30)
             if timezone.now() > deadline:
                 raise serializers.ValidationError('Attempt has expired.')
         self.context['attempt'] = attempt
