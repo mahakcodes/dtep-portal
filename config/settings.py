@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     'apps.tests.apps.TestsConfig',
     'apps.evaluations.apps.EvaluationsConfig',
     'apps.results.apps.ResultsConfig',
+    'apps.coding.apps.CodingConfig',
 ]
 
 MIDDLEWARE = [

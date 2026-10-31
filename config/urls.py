@@ -29,6 +29,7 @@ urlpatterns = [
     path('api/tests/', include('apps.tests.urls')),
     path('api/evaluations/', include('apps.evaluations.urls')),
     path('api/results/', include('apps.results.urls')),
+    path('api/coding/', include('apps.coding.urls')),
     path('api/submissions/<int:attempt_id>/result/', ResultDetailView.as_view(), name='submissions-result'),
 ]
 
