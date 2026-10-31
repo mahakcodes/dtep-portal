@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import Landing from './pages/Landing.jsx'
 import Login from './pages/Login.jsx'
@@ -10,6 +10,10 @@ import TakeTest from './pages/student/TakeTest.jsx'
 import TestResult from './pages/student/TestResult.jsx'
 import NotFound from './pages/NotFound.jsx'
 import { useAuth } from './context/AuthContext.jsx'
+
+// Dev-only: loaded lazily and only mounted when import.meta.env.DEV is true,
+// so it is excluded from production builds.
+const DevRunnerTest = lazy(() => import('./pages/dev/RunnerTest.jsx'))
 
 function RoleRedirect({ fallback = '/login' }) {
   const { user } = useAuth()
@@ -84,6 +88,17 @@ function App() {
           <TestResult />
         </ProtectedRoute>
       } />
+
+      {import.meta.env.DEV && (
+        <Route
+          path="/dev/runner"
+          element={
+            <Suspense fallback={null}>
+              <DevRunnerTest />
+            </Suspense>
+          }
+        />
+      )}
 
       <Route path="*" element={<NotFound />} />
     </Routes>
