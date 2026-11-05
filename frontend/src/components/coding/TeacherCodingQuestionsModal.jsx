@@ -5,6 +5,7 @@ import {
   describeTeacherCodingError,
   fetchCodingQuestion,
   fetchCodingQuestionsForTest,
+  fetchCodingQuestionSubmissions,
   updateCodingQuestion,
 } from '../../services/codingApi.js'
 
@@ -64,6 +65,7 @@ export default function TeacherCodingQuestionsModal({ test, onClose, onSaved }) 
   const [editing, setEditing] = useState(null)
   const [loadingQuestion, setLoadingQuestion] = useState(false)
   const [notice, setNotice] = useState('')
+  const [submissionsQuestion, setSubmissionsQuestion] = useState(null)
 
   const loadList = useCallback(async () => {
     if (!testId) return
@@ -225,15 +227,25 @@ export default function TeacherCodingQuestionsModal({ test, onClose, onSaved }) 
                           </p>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => startEdit(question.id)}
-                        disabled={loadingQuestion}
-                        className="inline-flex shrink-0 items-center gap-2 px-3 py-1.5 text-[12px] font-semibold rounded-md disabled:opacity-50"
-                        style={{ background: PAPER, border: `1px solid ${HAIRLINE}`, color: INK }}
-                      >
-                        <Pencil className="h-3.5 w-3.5" /> Edit
-                      </button>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSubmissionsQuestion(question)}
+                          className="inline-flex items-center gap-2 px-3 py-1.5 text-[12px] font-semibold rounded-md"
+                          style={{ background: PAPER, border: `1px solid ${HAIRLINE}`, color: INK }}
+                        >
+                          <Eye className="h-3.5 w-3.5" /> Submissions
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => startEdit(question.id)}
+                          disabled={loadingQuestion}
+                          className="inline-flex items-center gap-2 px-3 py-1.5 text-[12px] font-semibold rounded-md disabled:opacity-50"
+                          style={{ background: PAPER, border: `1px solid ${HAIRLINE}`, color: INK }}
+                        >
+                          <Pencil className="h-3.5 w-3.5" /> Edit
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -250,6 +262,144 @@ export default function TeacherCodingQuestionsModal({ test, onClose, onSaved }) 
               onSaved={handleSaved}
             />
           )}
+        </div>
+      </div>
+
+      {submissionsQuestion && (
+        <CodingQuestionSubmissionsModal
+          question={submissionsQuestion}
+          onClose={() => setSubmissionsQuestion(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function CodingQuestionSubmissionsModal({ question, onClose }) {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [openId, setOpenId] = useState(null)
+
+  useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      setLoading(true)
+      setError('')
+      try {
+        const data = await fetchCodingQuestionSubmissions(question.id)
+        if (mounted) setItems(Array.isArray(data) ? data : [])
+      } catch (err) {
+        if (mounted) setError(describeTeacherCodingError(err))
+      } finally {
+        if (mounted) setLoading(false)
+      }
+    })()
+    return () => { mounted = false }
+  }, [question.id])
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'rgba(22, 26, 34, 0.65)' }}>
+      <div className="flex max-h-[92vh] w-full max-w-4xl flex-col rounded-xl" style={{ background: PAPER }}>
+        <div className="flex items-start justify-between gap-4 px-6 py-4" style={{ borderBottom: `1px solid ${HAIRLINE}` }}>
+          <div className="min-w-0">
+            <p className={labelClass} style={{ color: SLATE }}>Submissions</p>
+            <h2 className="mt-0.5 truncate text-[16px] font-semibold" style={{ color: INK }}>
+              {question.title || `Question ${question.id}`}
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md"
+            style={{ background: PAPER, border: `1px solid ${HAIRLINE}`, color: SLATE }}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-3">
+          {loading ? (
+            <p className="inline-flex items-center gap-2 text-[12px]" style={{ color: SLATE }}>
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading submissions…
+            </p>
+          ) : error ? (
+            <div className="flex items-start gap-2 rounded-md p-3 text-[12px]" style={{ background: ERROR_BG, border: `1px solid ${ERROR_BORDER}`, color: ERROR }}>
+              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          ) : items.length === 0 ? (
+            <p className="text-[12px] italic text-stone-400">No submissions for this question yet.</p>
+          ) : (
+            <>
+              <p className="text-[11px]" style={{ color: SLATE }}>
+                Showing {items.length} submission{items.length === 1 ? '' : 's'} (newest first, up to 200).
+              </p>
+              {items.map((item, index) => (
+                <div key={item.id ?? index} className="rounded-lg p-3" style={{ background: IVORY, border: `1px solid ${HAIRLINE}` }}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-[13px] font-medium truncate" style={{ color: INK }}>
+                        {item.student?.username || item.student?.id || 'Unknown student'}
+                        <span className="font-mono text-[11px] font-normal" style={{ color: SLATE }}>
+                          {` · attempt #${item.attempt_id}`}
+                        </span>
+                      </p>
+                      <p className="font-mono text-[11px]" style={{ color: SLATE }}>
+                        {`${item.status} · ${item.score}/${item.max_score} · ${item.passed}/${item.total} cases`}
+                        {item.language ? ` · ${item.language}` : ''}
+                        {item.created_at ? ` · ${item.created_at}` : ''}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                      {(Array.isArray(item.cases) ? item.cases : []).map((caseItem, caseIndex) => (
+                        <span
+                          key={caseItem.index ?? caseIndex}
+                          className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                          style={{
+                            borderColor: caseItem.passed ? SUCCESS_BORDER : ERROR_BORDER,
+                            background: caseItem.passed ? SUCCESS_BG : ERROR_BG,
+                            color: caseItem.passed ? SUCCESS : ERROR,
+                          }}
+                        >
+                          {caseItem.passed ? <Check className="h-2.5 w-2.5" /> : <X className="h-2.5 w-2.5" />}
+                          {`Case ${(caseItem.index ?? caseIndex) + 1}`}
+                        </span>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setOpenId(openId === item.id ? null : item.id)}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 text-[11px] font-semibold rounded-md"
+                        style={{ background: PAPER, border: `1px solid ${HAIRLINE}`, color: INK }}
+                      >
+                        <Eye className="h-3.5 w-3.5" /> {openId === item.id ? 'Hide code' : 'View code'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {openId === item.id && (
+                    <pre
+                      className="mt-3 max-h-72 overflow-auto rounded-md p-3 font-mono text-[11px] leading-relaxed whitespace-pre"
+                      style={{ background: INK, color: PAPER }}
+                    >
+                      {item.source_code || ''}
+                    </pre>
+                  )}
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end px-6 py-3" style={{ borderTop: `1px solid ${HAIRLINE}`, background: IVORY }}>
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-[12px] font-medium rounded-md"
+            style={{ border: `1px solid ${HAIRLINE}`, background: PAPER, color: SLATE }}
+          >
+            Close
+          </button>
         </div>
       </div>
     </div>

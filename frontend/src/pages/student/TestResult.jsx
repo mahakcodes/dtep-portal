@@ -17,6 +17,7 @@ import {
   ChevronRight,
 } from 'lucide-react'
 import { fetchSubmissionResult } from '../../services/api.js'
+import { fetchCodingSubmissionsForAttempt } from '../../services/codingApi.js'
 
 function formatTimeTaken(sec) {
   const h = Math.floor(sec / 3600)
@@ -38,6 +39,18 @@ const optionLabelFromId = (optionId) => {
   return `Option ${String(optionId)}`
 }
 
+// Coding submission status -> chip styling. The server sends the status verbatim.
+const codingStatusTone = (status) => {
+  const key = String(status || '').toLowerCase()
+  if (key === 'accepted' || key === 'passed' || key === 'correct') {
+    return { label: 'Accepted', bg: 'bg-emerald-50', txt: 'text-emerald-700', border: 'border-emerald-200' }
+  }
+  if (key === 'partial') {
+    return { label: 'Partial', bg: 'bg-amber-50', txt: 'text-amber-700', border: 'border-amber-200' }
+  }
+  return { label: status || 'Unknown', bg: 'bg-rose-50', txt: 'text-rose-700', border: 'border-rose-200' }
+}
+
 export default function TestResult() {
   const { submissionId } = useParams()
   const navigate = useNavigate()
@@ -45,6 +58,21 @@ export default function TestResult() {
   const [loading, setLoading] = useState(true)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+  const [codingSubs, setCodingSubs] = useState([])
+
+  // Coding submissions are additive: any failure here leaves the MCQ result untouched.
+  useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      try {
+        const data = await fetchCodingSubmissionsForAttempt(submissionId)
+        if (mounted) setCodingSubs(Array.isArray(data) ? data : [])
+      } catch {
+        if (mounted) setCodingSubs([])
+      }
+    })()
+    return () => { mounted = false }
+  }, [submissionId])
 
   useEffect(() => {
     let mounted = true
@@ -345,6 +373,73 @@ export default function TestResult() {
             })}
           </div>
         </div>
+
+        {codingSubs.length > 0 && (
+          <div className="mt-10 max-w-4xl mx-auto">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Coding</p>
+                <h2 className="mt-1 font-serif text-2xl font-semibold text-slate-900">Coding questions</h2>
+              </div>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-200 px-3.5 py-1.5 text-xs font-semibold text-slate-700">
+                {codingSubs.length} questions
+              </span>
+            </div>
+
+            <div className="space-y-4">
+              {codingSubs.map((sub, idx) => {
+                const status = codingStatusTone(sub.status)
+                const cases = Array.isArray(sub.cases) ? sub.cases : []
+                return (
+                  <div key={sub.question_id ?? idx} className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <p className="text-base font-medium text-slate-900 leading-relaxed">
+                          {sub.title || `Question ${sub.question_id}`}
+                        </p>
+                        <span className="inline-block mt-1 text-[11px] font-mono text-slate-500">
+                          {`[Coding${sub.language ? ` · ${sub.language}` : ''}]`}
+                        </span>
+                      </div>
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-bold flex-shrink-0 ${status.bg} ${status.txt} border ${status.border}`}>
+                        {status.label}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3.5">
+                        <p className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-1.5">Score</p>
+                        <p className="font-mono text-sm font-semibold text-slate-900">
+                          {sub.score}<span className="text-slate-500"> / {sub.max_score}</span>
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3.5">
+                        <p className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-1.5">Cases passed</p>
+                        <p className="font-mono text-sm font-semibold text-slate-900">
+                          {sub.passed}<span className="text-slate-500"> / {sub.total}</span>
+                        </p>
+                      </div>
+                    </div>
+
+                    {cases.length > 0 && (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {cases.map((item, caseIdx) => (
+                          <span
+                            key={item.index ?? caseIdx}
+                            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${item.passed ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-rose-200 bg-rose-50 text-rose-700'}`}
+                          >
+                            {item.passed ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+                            {`Case ${(item.index ?? caseIdx) + 1}`}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <button

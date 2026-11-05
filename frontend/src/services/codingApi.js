@@ -27,6 +27,20 @@ export const updateCodingQuestion = async (questionId, body) => {
   return response.data
 }
 
+// Student: the latest coding submission per question for one attempt.
+export const fetchCodingSubmissionsForAttempt = async (attemptId) => {
+  const response = await api.get('/api/coding/submissions/', {
+    params: { attempt_id: attemptId },
+  })
+  return response.data
+}
+
+// Teacher: up to 200 submissions for one of the teacher's coding questions.
+export const fetchCodingQuestionSubmissions = async (questionId) => {
+  const response = await api.get(`/api/coding/questions/${questionId}/submissions/`)
+  return response.data
+}
+
 export const fetchGradingCases = async (questionId, attemptId) => {
   const response = await api.get(`/api/coding/questions/${questionId}/grading-cases/`, {
     params: { attempt_id: attemptId },
