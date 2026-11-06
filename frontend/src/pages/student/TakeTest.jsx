@@ -744,8 +744,8 @@ export default function TakeTest() {
             </div>
           )}
 
-          <div className={`rounded-2xl border border-slate-200 bg-white p-7 lg:p-9 shadow-sm overflow-hidden relative ${
-            isCurrentCoding ? 'lg:flex lg:min-h-0 lg:flex-1 lg:flex-col lg:p-6' : ''
+          <div className={`rounded-2xl border border-slate-200 bg-white p-7 lg:p-9 shadow-sm relative ${
+            isCurrentCoding ? 'overflow-visible lg:flex lg:min-h-0 lg:flex-1 lg:flex-col lg:p-6' : 'overflow-hidden'
           }`}>
             {isCurrentCoding ? (
               <>

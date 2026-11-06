@@ -22,13 +22,11 @@ import {
 const LANGUAGE_LABEL = { python: 'Python', javascript: 'JavaScript' }
 const CUSTOM_CASE_ID = '__custom_input__'
 
-// Draggable-panel sizes, stored as ratios so they stay valid on any window size.
+// Column-splitter size, stored as a ratio so it stays valid on any window size.
 const SIZES_KEY = 'coding-panel-sizes'
-const DEFAULT_SIZES = { left: 0.5, editor: 0.55 }
+const DEFAULT_SIZES = { left: 0.4 }
 const MIN_COLUMN_LEFT = 280
 const MIN_COLUMN_RIGHT = 420
-const MIN_EDITOR = 180
-const MIN_CONSOLE = 120
 
 function readSizes() {
   try {
@@ -36,11 +34,7 @@ function readSizes() {
     if (!raw) return DEFAULT_SIZES
     const parsed = JSON.parse(raw)
     const left = Number(parsed?.left)
-    const editor = Number(parsed?.editor)
-    return {
-      left: Number.isFinite(left) && left > 0 && left < 1 ? left : DEFAULT_SIZES.left,
-      editor: Number.isFinite(editor) && editor > 0 && editor < 1 ? editor : DEFAULT_SIZES.editor,
-    }
+    return { left: Number.isFinite(left) && left > 0 && left < 1 ? left : DEFAULT_SIZES.left }
   } catch {
     return DEFAULT_SIZES
   }
@@ -103,12 +97,12 @@ function PanelSplitter({ axis, onRatio, onCommit, onReset, onDragging }) {
       onPointerCancel={handlePointerUp}
       onDoubleClick={onReset}
       className={`group hidden shrink-0 touch-none select-none items-center justify-center lg:flex ${
-        isRow ? 'h-2 w-full cursor-row-resize' : 'w-2 cursor-col-resize'
+        isRow ? 'h-3 w-full cursor-row-resize' : 'w-2 cursor-col-resize'
       }`}
     >
       <div
-        className={`rounded-full bg-slate-200 transition-all group-hover:bg-blue-500 ${
-          isRow ? 'h-1 w-10 group-hover:h-1.5' : 'h-10 w-1 group-hover:w-1.5'
+        className={`rounded-full bg-slate-300 transition-all group-hover:bg-blue-500 ${
+          isRow ? 'h-1.5 w-14' : 'h-10 w-1 group-hover:w-1.5'
         }`}
       />
     </div>
@@ -174,14 +168,12 @@ export default function CodingQuestionPanel({ attemptId, questionId, title, maxM
 
   // Splitter state (large screens only).
   const [leftRatio, setLeftRatio] = useState(initialSizes.left)
-  const [editorRatio, setEditorRatio] = useState(initialSizes.editor)
   const [dragging, setDragging] = useState(false)
   const [isLg, setIsLg] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches
   )
   const leftColRef = useRef(null)
   const rightColRef = useRef(null)
-  const editorPaneRef = useRef(null)
   const consolePaneRef = useRef(null)
 
   useEffect(() => {
@@ -246,29 +238,17 @@ export default function CodingQuestionPanel({ attemptId, questionId, title, maxM
     }
   }, [dragging])
 
-  // Restore the stored sizes, clamped to the current window size.
+  // Clamp the stored column ratio to the current width.
   useEffect(() => {
     if (!isLg) return
     const left = leftColRef.current
     const right = rightColRef.current
-    if (left && right) {
-      const total = left.offsetWidth + right.offsetWidth
-      const next = total
-        ? clampRatio(leftRatio * total, MIN_COLUMN_LEFT, total - MIN_COLUMN_RIGHT)
-        : null
-      if (next !== null) setLeftRatio(next / total)
-    }
-    const editor = editorPaneRef.current
-    const consolePane = consolePaneRef.current
-    if (editor && consolePane) {
-      const total = editor.offsetHeight + consolePane.offsetHeight
-      const next = total
-        ? clampRatio(editorRatio * total, MIN_EDITOR, total - MIN_CONSOLE)
-        : null
-      if (next !== null) setEditorRatio(next / total)
-    }
+    if (!left || !right) return
+    const total = left.offsetWidth + right.offsetWidth
+    const next = total ? clampRatio(leftRatio * total, MIN_COLUMN_LEFT, total - MIN_COLUMN_RIGHT) : null
+    if (next !== null) setLeftRatio(next / total)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [isLg])
 
   const allowedLanguages = question?.allowed_languages?.length ? question.allowed_languages : ['python']
   const visibleCases = useMemo(
@@ -292,24 +272,18 @@ export default function CodingQuestionPanel({ attemptId, questionId, title, maxM
     if (next !== null) setLeftRatio(next / total)
   }, [])
 
-  const handleRowDrag = useCallback((clientY) => {
-    const editor = editorPaneRef.current
-    const consolePane = consolePaneRef.current
-    if (!editor || !consolePane) return
-    const total = editor.offsetHeight + consolePane.offsetHeight
-    if (!total) return
-    const next = clampRatio(clientY - editor.getBoundingClientRect().top, MIN_EDITOR, total - MIN_CONSOLE)
-    if (next !== null) setEditorRatio(next / total)
-  }, [])
-
-  const commitSizes = () => saveSizes({ left: leftRatio, editor: editorRatio })
+  const commitSizes = () => saveSizes({ left: leftRatio })
   const resetColumnSize = () => {
     setLeftRatio(DEFAULT_SIZES.left)
-    saveSizes({ left: DEFAULT_SIZES.left, editor: editorRatio })
+    saveSizes({ left: DEFAULT_SIZES.left })
   }
-  const resetRowSize = () => {
-    setEditorRatio(DEFAULT_SIZES.editor)
-    saveSizes({ left: leftRatio, editor: DEFAULT_SIZES.editor })
+  const resetLayout = () => {
+    try {
+      localStorage.removeItem(SIZES_KEY)
+    } catch {
+      /* ignore */
+    }
+    setLeftRatio(DEFAULT_SIZES.left)
   }
 
   const resetOutput = () => {
@@ -355,6 +329,7 @@ export default function CodingQuestionPanel({ attemptId, questionId, title, maxM
     } finally {
       setBusy(null)
       setRunnerStatus(null)
+      setTab('output')
     }
   }
 
@@ -402,6 +377,7 @@ export default function CodingQuestionPanel({ attemptId, questionId, title, maxM
     } finally {
       setBusy(null)
       setRunnerStatus(null)
+      setTab('result')
     }
   }
 
@@ -443,11 +419,11 @@ export default function CodingQuestionPanel({ attemptId, questionId, title, maxM
     busy === 'run' ? runnerMessage || 'Running…' : busy === 'submit' ? runnerMessage || 'Submitting…' : ''
 
   return (
-    <div className={`grid gap-6 lg:flex lg:min-h-0 lg:min-w-0 lg:flex-1 lg:flex-row lg:gap-0 lg:overflow-hidden ${dragging ? 'select-none' : ''}`}>
+    <div className={`grid gap-6 lg:flex lg:min-w-0 lg:flex-row lg:gap-0 ${dragging ? 'select-none' : ''}`}>
       {/* Left: statement, constraints, visible samples */}
       <div
         ref={leftColRef}
-        className="space-y-5 lg:min-h-0 lg:min-w-[280px] lg:overflow-y-auto lg:pr-2"
+        className="space-y-5 lg:max-h-[calc(100vh-220px)] lg:min-w-[280px] lg:overflow-y-auto lg:pr-2 lg:pb-6"
         style={isLg ? { flexGrow: leftRatio, flexBasis: 0 } : undefined}
       >
         <div className="flex items-start justify-between gap-3">
@@ -496,86 +472,10 @@ export default function CodingQuestionPanel({ attemptId, questionId, title, maxM
             </div>
           )}
         </div>
-      </div>
-
-      <PanelSplitter
-        axis="col"
-        onRatio={handleColumnDrag}
-        onCommit={commitSizes}
-        onReset={resetColumnSize}
-        onDragging={setDragging}
-      />
-
-      {/* Right: toolbar, editor and console. The editor/console panes are split by the row handle. */}
-      <div
-        ref={rightColRef}
-        className="flex flex-col gap-4 lg:min-h-0 lg:min-w-[420px] lg:gap-0 lg:overflow-hidden"
-        style={isLg ? { flexGrow: 1 - leftRatio, flexBasis: 0 } : undefined}
-      >
-        <div className="flex flex-wrap items-center justify-between gap-2 lg:shrink-0 lg:pb-3">
-          <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
-            Language
-            <select
-              value={language || ''}
-              onChange={(e) => setLanguage(e.target.value)}
-              disabled={disabled}
-              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-800 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:opacity-60"
-            >
-              {allowedLanguages.map((lang) => (
-                <option key={lang} value={lang}>
-                  {LANGUAGE_LABEL[lang] || lang}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleRun}
-              disabled={disabled}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-            >
-              {busy === 'run' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-              {busy === 'run' ? 'Running…' : 'Run'}
-            </button>
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={disabled}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
-            >
-              {busy === 'submit' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-              {busy === 'submit' ? 'Submitting…' : 'Submit'}
-            </button>
-          </div>
-        </div>
-
-        <div
-          ref={editorPaneRef}
-          className={`overflow-hidden rounded-xl border border-slate-200 bg-white lg:flex lg:min-h-[180px] lg:flex-col ${
-            dragging ? 'lg:pointer-events-none' : ''
-          }`}
-          style={isLg ? { flexGrow: editorRatio, flexBasis: 0 } : undefined}
-        >
-          <CodeEditor language={language} value={code} onChange={setCode} />
-        </div>
-
-        <PanelSplitter
-          axis="row"
-          onRatio={handleRowDrag}
-          onCommit={commitSizes}
-          onReset={resetRowSize}
-          onDragging={setDragging}
-        />
 
         {/* Console */}
-        <div
-          ref={consolePaneRef}
-          className="rounded-xl border border-slate-200 bg-white lg:flex lg:min-h-[120px] lg:flex-col"
-          style={isLg ? { flexGrow: 1 - editorRatio, flexBasis: 0 } : undefined}
-        >
-          <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-200 px-2.5 py-1.5 lg:shrink-0">
+        <div ref={consolePaneRef} className="shrink-0 rounded-xl border border-slate-200 bg-white">
+          <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-200 px-2.5 py-1.5">
             <span className="flex items-center gap-1.5 pr-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               <Terminal className="h-3.5 w-3.5" />
               Console
@@ -596,6 +496,14 @@ export default function CodingQuestionPanel({ attemptId, questionId, title, maxM
                 {t.label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={resetLayout}
+              title="Clear the saved panel sizes and restore the defaults"
+              className="ml-1 rounded-lg border border-slate-200 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+            >
+              Reset layout
+            </button>
             {busyText && (
               <span className="ml-auto flex items-center gap-1.5 pr-1 text-[11px] font-semibold text-blue-700">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -604,7 +512,7 @@ export default function CodingQuestionPanel({ attemptId, questionId, title, maxM
             )}
           </div>
 
-          <div className="p-4 pb-6 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+          <div className="h-[220px] overflow-y-auto p-4 pb-6">
             {tab === 'input' && (
               <>
                 <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
@@ -679,9 +587,7 @@ export default function CodingQuestionPanel({ attemptId, questionId, title, maxM
                   </div>
                 )}
                 {!runError && !runResults && (
-                  <p className="text-xs text-slate-400">
-                    Press Run to execute your code against the visible sample cases. Output appears here.
-                  </p>
+                  <p className="text-xs text-slate-400">Run or submit to see results here.</p>
                 )}
               </>
             )}
@@ -738,13 +644,72 @@ export default function CodingQuestionPanel({ attemptId, questionId, title, maxM
                 )}
 
                 {!submitError && !submitResult && (
-                  <p className="text-xs text-slate-400">
-                    Submit your solution to see your score here. This score counts toward your test result.
-                  </p>
+                  <p className="text-xs text-slate-400">Run or submit to see results here.</p>
                 )}
               </>
             )}
           </div>
+        </div>
+      </div>
+
+      <PanelSplitter
+        axis="col"
+        onRatio={handleColumnDrag}
+        onCommit={commitSizes}
+        onReset={resetColumnSize}
+        onDragging={setDragging}
+      />
+
+      {/* Right: toolbar and editor only. The console lives in the left column. */}
+      <div
+        ref={rightColRef}
+        className="flex flex-col gap-4 lg:min-w-[420px]"
+        style={isLg ? { flexGrow: 1 - leftRatio, flexBasis: 0 } : undefined}
+      >
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 lg:pb-3">
+          <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Language
+            <select
+              value={language || ''}
+              onChange={(e) => setLanguage(e.target.value)}
+              disabled={disabled}
+              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-800 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:opacity-60"
+            >
+              {allowedLanguages.map((lang) => (
+                <option key={lang} value={lang}>
+                  {LANGUAGE_LABEL[lang] || lang}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleRun}
+              disabled={disabled}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              {busy === 'run' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+              {busy === 'run' ? 'Running…' : 'Run'}
+            </button>
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={disabled}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {busy === 'submit' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+              {busy === 'submit' ? 'Submitting…' : 'Submit'}
+            </button>
+          </div>
+        </div>
+
+        <div
+          className="shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white"
+          style={{ height: 'clamp(360px, 62vh, 640px)' }}
+        >
+          <CodeEditor language={language} value={code} onChange={setCode} height="100%" />
         </div>
       </div>
     </div>
