@@ -160,17 +160,6 @@ export default function TestResult() {
             <h1 className="mt-3 font-serif text-[2.5rem] leading-tight tracking-tight font-semibold text-slate-900">
               {result.test_title}
             </h1>
-            <p className="mt-2 text-sm text-slate-600 max-w-lg mx-auto">
-              {result.passed ? (
-                <span className="inline-flex items-center gap-1.5 text-emerald-700 font-semibold">
-                  <CheckCircle2 className="h-4 w-4" /> Test passed
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 text-rose-700 font-semibold">
-                  <XCircle className="h-4 w-4" /> Test not passed
-                </span>
-              )}
-            </p>
 
             <div className="mt-8 grid gap-4 sm:grid-cols-4 max-w-3xl mx-auto">
               <div className="rounded-2xl bg-slate-50 p-4 text-center border border-slate-200">
