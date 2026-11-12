@@ -331,6 +331,7 @@ class AttemptSubmissionsQuerySerializer(serializers.Serializer):
 
 
 class StudentCodingSubmissionHistorySerializer(serializers.ModelSerializer):
+    question_title = serializers.CharField(source='question.title', read_only=True)
     passed = serializers.IntegerField(source='passed_count', read_only=True)
     total = serializers.IntegerField(source='total_count', read_only=True)
     cases = serializers.SerializerMethodField()
@@ -338,7 +339,7 @@ class StudentCodingSubmissionHistorySerializer(serializers.ModelSerializer):
     class Meta:
         model = CodingSubmission
         fields = (
-            'question_id', 'status', 'score', 'max_score', 'passed', 'total',
+            'question_id', 'question_title', 'status', 'score', 'max_score', 'passed', 'total',
             'cases', 'language', 'source_code', 'created_at',
         )
 
