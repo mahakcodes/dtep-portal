@@ -220,6 +220,7 @@ The response contains the latest submission per coding question for that attempt
 [
   {
     "question_id": 31,
+    "question_title": "Sum two numbers",
     "status": "partial",
     "score": 2.0,
     "max_score": 10.0,

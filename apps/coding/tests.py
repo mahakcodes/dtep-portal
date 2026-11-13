@@ -500,7 +500,9 @@ class CodingQuestionAPITests(APITestCase):
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(len(response.data), 2)
         self.assertEqual(response.data[0]['question_id'], other_question.id)
+        self.assertEqual(response.data[0]['question_title'], other_question.title)
         latest_row = next(row for row in response.data if row['question_id'] == question.id)
+        self.assertEqual(latest_row['question_title'], question.title)
         self.assertEqual(latest_row['status'], 'partial')
         self.assertEqual(latest_row['source_code'], 'new')
         self.assertEqual(latest_row['cases'], [{'index': 0, 'passed': True}, {'index': 1, 'passed': False}])
@@ -602,7 +604,7 @@ class CodingQuestionAPITests(APITestCase):
         self.assertEqual(response.status_code, 201, response.data)
         return response
 
-    def test_published_coding_only_test_starts_and_scores_through_existing_submit(self):
+    def test_published_coding_only_test_starts_and_scores_through_evaluations_submit(self):
         test = self.create_test_through_teacher_api('Only coding')
         self.assertTrue(test.is_published)
         question, visible, hidden = self.add_coding_question(test, max_marks=9)
@@ -616,6 +618,50 @@ class CodingQuestionAPITests(APITestCase):
         result = Result.objects.get(attempt=attempt)
         self.assertEqual(result.score, 9)
         self.assertEqual(result.max_score, 9)
+        result_response = self.client.get(f'/api/submissions/{attempt.id}/result/')
+        self.assertEqual(result_response.status_code, 200, result_response.data)
+        self.assertEqual(result_response.data['score'], 9)
+        self.assertEqual(result_response.data['max_score'], 9)
+
+    def test_published_coding_only_test_scores_through_legacy_test_submit(self):
+        test = self.create_test_through_teacher_api('Only coding legacy')
+        self.assertTrue(test.is_published)
+        question, visible, hidden = self.add_coding_question(test, max_marks=9)
+        attempt = self.start_test(test)
+        self.post_coding_result(question, attempt, {visible.id, hidden.id})
+
+        submitted = self.client.post(f'/api/tests/{test.id}/submit/', {'answers': []}, format='json')
+        self.assertEqual(submitted.status_code, 200, submitted.data)
+        self.assertEqual(submitted.data['score'], 9)
+        self.assertEqual(submitted.data['total_marks'], 9)
+        result = Result.objects.get(attempt=attempt)
+        self.assertEqual(result.score, 9)
+        self.assertEqual(result.max_score, 9)
+        result_response = self.client.get(f'/api/submissions/{attempt.id}/result/')
+        self.assertEqual(result_response.status_code, 200, result_response.data)
+        self.assertEqual(result_response.data['score'], 9)
+        self.assertEqual(result_response.data['max_score'], 9)
+
+    def test_coding_submission_endpoint_throttles_after_30_requests_per_minute(self):
+        test = self.create_test_through_teacher_api('Throttled coding')
+        question, visible, hidden = self.add_coding_question(test)
+        attempt = self.start_test(test)
+        case_results = [
+            {'case_id': case.id, 'passed': True, 'status': 'ok'}
+            for case in (visible, hidden)
+        ]
+        payload = {
+            'question_id': question.id,
+            'attempt_id': attempt.id,
+            'language': 'python',
+            'source_code': 'print(input())',
+            'case_results': case_results,
+        }
+        for request_index in range(30):
+            response = self.client.post('/api/coding/submissions/', payload, format='json')
+            self.assertEqual(response.status_code, 201, f'Request {request_index + 1}: {response.data}')
+        throttled = self.client.post('/api/coding/submissions/', payload, format='json')
+        self.assertEqual(throttled.status_code, 429, throttled.data)
 
     def test_mixed_mcq_and_coding_test_totals_and_unpublished_coding_is_excluded(self):
         test = self.create_test_through_teacher_api('Mixed', questions=[{
