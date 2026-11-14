@@ -308,7 +308,13 @@ dtep-portal/
 
 See [`API_CONTRACT.md`](API_CONTRACT.md) for endpoints, request and response shapes, and the coding and anti-cheating rules.
 
+## 🤝 Team
+
+| Name | LinkedIn |
+|---|---|
+| **Mahak Maheshwari** | [![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/mahak-maheshwari06/) |
+| **Ishita Kuntal** | [![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/ishita-kuntal-15261a349/) |
 
 <div align="center">
-<sub>Built with Django, React and a lot of free-tier engineering.</sub>
+<sub>Built with ❤️ by <a href="https://github.com/mahakcodes">Mahak</a> &amp; <a href="https://github.com/ishitakuntal>">Ishita</a></sub>
 </div>
