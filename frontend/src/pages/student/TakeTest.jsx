@@ -25,7 +25,10 @@ import {
   Bookmark,
   BookmarkCheck,
 } from 'lucide-react'
-import { fetchTestDetails, submitTest } from '../../services/api.js'
+import { fetchTestDetails, submitTest, startTest } from '../../services/api.js'
+import { fetchCodingQuestionsForTest, describeCodingError } from '../../services/codingApi.js'
+import { disposeRunners } from '../../lib/codeRunner.js'
+import CodingQuestionPanel from '../../components/coding/CodingQuestionPanel.jsx'
 
 function formatTime(sec) {
   const m = Math.floor(sec / 60)
@@ -150,6 +153,12 @@ export default function TakeTest() {
   const [violationMessage, setViolationMessage] = useState('')
   const [isFullscreen, setIsFullscreen] = useState(false)
 
+  // Coding questions share this attempt, timer and violation counter.
+  const [codingQuestions, setCodingQuestions] = useState([])
+  const [codingError, setCodingError] = useState('')
+  const [attemptId, setAttemptId] = useState(null)
+  const [codingStatus, setCodingStatus] = useState({})
+
   const timerRef = useRef(null)
   const containerRef = useRef(null)
 
@@ -179,6 +188,41 @@ export default function TakeTest() {
       mounted = false
     }
   }, [id])
+
+  // Coding questions live in their own resource. Never mocked: any failure is shown.
+  useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      try {
+        const list = await fetchCodingQuestionsForTest(id)
+        if (!mounted) return
+        const items = Array.isArray(list) ? list : []
+        setCodingQuestions(items)
+        setCodingError('')
+        if (items.length) {
+          // startTest is idempotent, so re-opening the page reuses the active attempt.
+          const attempt = await startTest({ test_id: id })
+          if (!mounted) return
+          setAttemptId(attempt?.id ?? null)
+          if (!attempt?.id) setCodingError('We could not start a graded attempt for this test.')
+        }
+      } catch (err) {
+        if (!mounted) return
+        // 404 means the test has no coding questions available to this student.
+        if (err?.response?.status === 404) {
+          setCodingQuestions([])
+        } else {
+          setCodingError(describeCodingError(err))
+        }
+      }
+    })()
+    return () => {
+      mounted = false
+    }
+  }, [id])
+
+  // Terminate the code runners when leaving the test.
+  useEffect(() => () => disposeRunners(), [])
 
   const registerViolation = useCallback((message) => {
     setViolations((prev) => {
@@ -266,7 +310,7 @@ export default function TakeTest() {
     } catch (_) {}
   }
 
-  const startTest = async () => {
+  const beginTest = async () => {
     setShowRules(false)
     setStarted(true)
     setStartTime(Date.now())
@@ -289,17 +333,27 @@ export default function TakeTest() {
   }, [started, secondsLeft, submitting, warnLow, testData])
 
   const questions = testData?.questions || []
-  const total = questions.length
-  const q = questions[currentIdx]
+  // Coding questions are appended after the test's own questions so the palette,
+  // timer and violation counter stay shared.
+  const codingItems = codingQuestions.map((cq, i) => ({
+    ...cq,
+    type: 'coding',
+    number: questions.length + i + 1,
+  }))
+  const allQuestions = [...questions, ...codingItems]
+  const total = allQuestions.length
+  const q = allQuestions[currentIdx]
 
-  // Count answered items (both selected MCQ options and typed descriptive text)
+  // Count answered items (MCQ options, descriptive text, and submitted coding questions)
   const answeredCount = useMemo(() => {
-    return Object.entries(responses).filter(([, val]) => {
+    const mcqAnswered = Object.entries(responses).filter(([, val]) => {
       if (val === null || val === undefined) return false
       if (typeof val === 'string' && val.trim() === '') return false
       return true
     }).length
-  }, [responses])
+    const codingAnswered = codingQuestions.filter((cq) => codingStatus[cq.id]).length
+    return mcqAnswered + codingAnswered
+  }, [responses, codingQuestions, codingStatus])
 
   const unansweredForSubmit = Math.max(0, total - answeredCount)
 
@@ -501,7 +555,7 @@ export default function TakeTest() {
 
                 <div className="mt-8 flex flex-col items-start gap-3 sm:flex-row sm:items-center">
                   <button
-                    onClick={startTest}
+                    onClick={beginTest}
                     className="group inline-flex items-center gap-2.5 rounded-full bg-charcoal-300 px-6 py-3.5 text-sm font-semibold text-cream-100 transition-all duration-300 hover:bg-charcoal-400 hover:shadow-soft-xl hover:-translate-y-0.5"
                   >
                     <Maximize2 className="h-4 w-4" strokeWidth={1.75} />
@@ -542,6 +596,8 @@ export default function TakeTest() {
     )
   }
 
+  const isCurrentCoding = q?.type === 'coding'
+
   const isCurrentDescriptive =
     q?.question_type === 'DESCRIPTIVE' ||
     q?.question_type === 'subjective' ||
@@ -553,27 +609,30 @@ export default function TakeTest() {
   const charCount = currentText.length
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900" ref={containerRef}>
+    <div
+      className={`min-h-screen bg-slate-50 text-slate-900 ${isFullscreen ? 'h-screen overflow-y-auto' : ''}`}
+      ref={containerRef}
+    >
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur-md">
-        <div className="mx-auto flex h-18 items-center justify-between gap-4 px-5 lg:px-8">
-          <div className="flex items-center gap-3 min-w-0">
+        <div className="mx-auto flex flex-wrap items-center justify-between gap-x-2.5 gap-y-2 px-3 py-2.5 sm:h-18 sm:flex-nowrap sm:gap-4 sm:px-5 sm:py-0 lg:px-8">
+          <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 flex-shrink-0">
               <FileText className="h-4.5 w-4.5 text-white" strokeWidth={1.75} />
             </div>
             <div className="min-w-0 leading-tight">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-charcoal-50">Test #{testData.id}</p>
-              <p className="font-serif text-base font-semibold text-charcoal-300 truncate">{testData.title}</p>
+              <p className="truncate text-[11px] font-semibold uppercase tracking-[0.12em] text-charcoal-50">Test #{testData.id}</p>
+              <p className="truncate font-serif text-sm font-semibold text-charcoal-300 sm:text-base">{testData.title}</p>
             </div>
           </div>
 
-          <div className={`inline-flex items-center gap-2.5 rounded-full border px-4 py-2 font-medium shadow-soft-sm ${toneWarn}`}>
+          <div className={`order-last inline-flex w-full items-center justify-center gap-2 rounded-full border px-3 py-1.5 font-medium shadow-soft-sm sm:order-none sm:w-auto sm:gap-2.5 sm:px-4 sm:py-2 ${toneWarn}`}>
             <Clock className="h-4 w-4" strokeWidth={1.75} />
             <span className="text-[11px] uppercase tracking-wider font-semibold opacity-80">Time left</span>
-            <span className={`font-serif text-lg font-bold tabular-nums ${toneNum}`}>{formatTime(secondsLeft)}</span>
+            <span className={`font-serif text-base font-bold tabular-nums sm:text-lg ${toneNum}`}>{formatTime(secondsLeft)}</span>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-bold ${
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-1 text-[10px] font-bold sm:gap-1.5 sm:px-3 sm:py-1.5 sm:text-[11px] ${
               violations >= 2 ? 'bg-terracotta-50 text-terracotta-400 border-terracotta-400/30' : violations >= 1 ? 'bg-terracotta-50/70 text-terracotta-400 border-terracotta-400/20' : 'bg-olive-50 text-olive-500 border-olive-400/20'
             }`}>
               <MonitorOff className="h-3.5 w-3.5" strokeWidth={2} />
@@ -581,7 +640,7 @@ export default function TakeTest() {
             </span>
             <button
               onClick={() => setShowSubmit(true)}
-              className="group inline-flex items-center gap-2 rounded-full bg-charcoal-300 px-4.5 py-2.5 text-xs font-semibold text-cream-100 transition-all duration-300 hover:bg-charcoal-400 hover:shadow-soft hover:-translate-y-0.5 disabled:opacity-50"
+              className="group inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-charcoal-300 px-3 py-2 text-[11px] font-semibold text-cream-100 transition-all duration-300 hover:bg-charcoal-400 hover:shadow-soft hover:-translate-y-0.5 disabled:opacity-50 sm:gap-2 sm:px-4.5 sm:py-2.5 sm:text-xs"
               disabled={submitting}
             >
               <Send className="h-3.5 w-3.5" strokeWidth={2} />
@@ -591,36 +650,54 @@ export default function TakeTest() {
         </div>
       </header>
 
-      <div className="mx-auto max-w-[1400px] grid gap-6 px-4 py-6 lg:px-8 lg:py-8 lg:grid-cols-[320px_1fr]">
-        <aside className="space-y-6">
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sticky top-24">
-            <div className="flex items-center justify-between">
+      <div className={`mx-auto max-w-[1400px] grid gap-6 px-4 py-6 lg:px-8 ${
+        isCurrentCoding
+          ? 'lg:flex lg:h-[calc(100vh-4.5rem)] lg:min-h-0 lg:flex-col lg:gap-3 lg:overflow-hidden lg:py-4'
+          : 'lg:py-8 lg:grid-cols-[320px_1fr]'
+      }`}>
+        <aside className={isCurrentCoding ? 'min-h-0 shrink-0' : 'space-y-6'}>
+          <div className={
+            isCurrentCoding
+              ? 'rounded-2xl border border-slate-200 bg-white px-4 py-2.5 shadow-sm lg:flex lg:items-center lg:gap-4'
+              : 'rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sticky top-24'
+          }>
+            <div className={isCurrentCoding ? 'flex items-center gap-2' : 'flex items-center justify-between'}>
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Progress</p>
               <span className="font-mono text-lg font-bold text-slate-900 tabular-nums">
                 {answeredCount}<span className="text-xs text-slate-500 font-medium"> / {total}</span>
               </span>
             </div>
-            <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-100">
+            <div className={
+              isCurrentCoding
+                ? 'mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-100 lg:mt-0 lg:w-40 lg:shrink-0'
+                : 'mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-100'
+            }>
               <div
                 className="h-full rounded-full bg-gradient-to-r from-blue-500 to-blue-600 transition-all duration-500"
                 style={{ width: total ? `${(answeredCount / total) * 100}%` : '0%' }}
               />
             </div>
 
-            <div className="mt-6">
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Question palette</p>
-              <div className="mt-4 grid grid-cols-5 gap-2">
-                {questions.map((qq, i) => {
+            <div className={isCurrentCoding ? 'mt-3 lg:mt-0 lg:min-w-0 lg:flex-1' : 'mt-6'}>
+              {!isCurrentCoding && (
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Question palette</p>
+              )}
+              <div className={isCurrentCoding ? 'flex gap-2 overflow-x-auto pb-1 lg:pb-0' : 'mt-4 grid grid-cols-5 gap-2'}>
+                {allQuestions.map((qq, i) => {
                   const val = responses[qq.id]
-                  const hasAnswered = val !== null && val !== undefined && val !== ''
+                  const hasAnswered =
+                    (val !== null && val !== undefined && val !== '') ||
+                    (qq.type === 'coding' && Boolean(codingStatus[qq.id]))
                   const v = visited[i]
                   const b = bookmarks[qq.id]
                   const cur = i === currentIdx
                   return (
                     <button
-                      key={qq.id}
+                      key={`${qq.type === 'coding' ? 'c' : 'q'}-${qq.id}`}
                       onClick={() => goTo(i)}
-                      className={`group relative inline-flex h-10 items-center justify-center rounded-xl text-xs font-bold transition-all duration-200 ${
+                      className={`group relative inline-flex items-center justify-center rounded-xl text-xs font-bold transition-all duration-200 ${
+                        isCurrentCoding ? 'h-8 w-8 shrink-0' : 'h-10'
+                      } ${
                         cur
                           ? 'ring-2 ring-blue-600 bg-blue-50 text-blue-700 shadow-sm scale-[1.03] -translate-y-0.5'
                           : hasAnswered
@@ -641,27 +718,73 @@ export default function TakeTest() {
           </div>
         </aside>
 
-        <div className="space-y-6">
-          <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-6 py-4 shadow-sm">
-            <div className="flex items-center gap-3">
-              <span className="inline-flex items-center justify-center h-10 w-10 rounded-xl bg-blue-600 text-white font-semibold text-base">
+        <div className={`space-y-6 ${isCurrentCoding ? 'lg:flex lg:min-h-0 lg:flex-1 lg:flex-col' : ''}`}>
+          <div className={`flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-6 py-4 shadow-sm ${
+            isCurrentCoding ? 'lg:shrink-0 lg:px-4 lg:py-2' : ''
+          }`}>
+            <div className={`flex items-center gap-3 ${isCurrentCoding ? 'lg:gap-2' : ''}`}>
+              <span className={`inline-flex items-center justify-center h-10 w-10 rounded-xl bg-blue-600 font-semibold text-white text-base ${
+                isCurrentCoding ? 'lg:h-7 lg:w-7 lg:rounded-lg lg:text-xs' : ''
+              }`}>
                 {currentIdx + 1}
               </span>
-              <div className="leading-tight">
+              <div className={`leading-tight ${isCurrentCoding ? 'lg:flex lg:items-baseline lg:gap-2' : ''}`}>
                 <p className="text-[10px] uppercase tracking-[0.14em] font-semibold text-charcoal-50">Question {currentIdx + 1} of {total}</p>
-                <p className="text-sm font-medium text-charcoal-100">
-                  {isCurrentDescriptive ? 'Type your subjective answer below' : 'Select one option below'}
+                <p className={`text-sm font-medium text-charcoal-100 ${isCurrentCoding ? 'lg:text-xs' : ''}`}>
+                  {isCurrentCoding
+                    ? 'Write your solution and run it against the samples'
+                    : isCurrentDescriptive
+                    ? 'Type your subjective answer below'
+                    : 'Select one option below'}
                 </p>
               </div>
             </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-7 lg:p-9 shadow-sm overflow-hidden relative">
-            <h2 className="relative font-serif text-2xl leading-[1.35] text-charcoal-300 lg:text-[1.75rem]">
-              {q?.text}
-            </h2>
+          {codingError && (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-5 py-3 text-sm font-semibold text-rose-700">
+              {codingError}
+            </div>
+          )}
 
-            <div className="relative mt-8">
+          <div className={`rounded-2xl border border-slate-200 bg-white p-7 lg:p-9 shadow-sm relative ${
+            isCurrentCoding ? 'overflow-visible lg:flex lg:min-h-0 lg:flex-1 lg:flex-col lg:p-6' : 'overflow-hidden'
+          }`}>
+            {isCurrentCoding ? (
+              <>
+                <CodingQuestionPanel
+                  key={q.id}
+                  attemptId={attemptId}
+                  questionId={q.id}
+                  title={q.title}
+                  maxMarks={q.max_marks}
+                  onResult={(result) => setCodingStatus((prev) => ({ ...prev, [q.id]: result }))}
+                />
+                <div className="mt-8 flex shrink-0 items-center justify-end gap-2.5 border-t border-slate-200 pt-5 lg:mt-4 lg:pt-3">
+                  <button
+                    onClick={goPrev}
+                    disabled={currentIdx === 0}
+                    className="group inline-flex items-center gap-2 rounded-full border border-beige-200 bg-white px-4.5 py-2.5 text-xs font-semibold text-charcoal-200 disabled:opacity-40"
+                  >
+                    <ChevronLeft className="h-4 w-4" strokeWidth={2} />
+                    Previous
+                  </button>
+                  <button
+                    onClick={goNext}
+                    className="group inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4.5 py-2.5 text-xs font-semibold text-white hover:bg-blue-700"
+                  >
+                    {currentIdx === total - 1 ? 'Finish' : 'Next question'}
+                    <ChevronRight className="h-4 w-4" strokeWidth={2} />
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 className="relative font-serif text-2xl leading-[1.35] text-charcoal-300 lg:text-[1.75rem]">
+                  {q?.text}
+                </h2>
+
+                <div className="relative mt-8">
               {isCurrentDescriptive ? (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
@@ -762,6 +885,8 @@ export default function TakeTest() {
                 </button>
               </div>
             </div>
+              </>
+            )}
           </div>
         </div>
       </div>

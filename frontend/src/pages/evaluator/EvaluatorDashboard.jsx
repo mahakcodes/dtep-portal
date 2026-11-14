@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Search,
@@ -35,6 +35,8 @@ import {
   GraduationCap,
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext.jsx'
+import TeacherCodingQuestionsModal from '../../components/coding/TeacherCodingQuestionsModal.jsx'
+import { fetchCodingQuestionsForTest } from '../../services/codingApi.js'
 
 const PAPER = '#FAF9F6'
 const IVORY = '#F2F0EA'
@@ -86,6 +88,7 @@ export default function EvaluatorDashboard() {
   const [search, setSearch] = useState('')
   const [selectedTestDetails, setSelectedTestDetails] = useState(null)
   const [editingTest, setEditingTest] = useState(null)
+  const [codingQuestionsTest, setCodingQuestionsTest] = useState(null)
 
   const nav = [
     { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -107,6 +110,43 @@ export default function EvaluatorDashboard() {
   const mySubmissions = useMemo(
     () => (me ? getSubmissionsForTeacher(me.id) : []),
     [me, getSubmissionsForTeacher, submissions]
+  )
+
+  // Coding questions are not part of test.questions, so their per-test totals are
+  // fetched separately and used for display only (nothing is sent back to the server).
+  const [codingTotals, setCodingTotals] = useState({})
+
+  const myTestIdsKey = useMemo(
+    () => myTests.map((t) => t.id).filter((id) => id != null).join(','),
+    [myTests]
+  )
+
+  const loadCodingTotals = useCallback(async (ids, replace) => {
+    if (!ids.length) return
+    const results = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const data = await fetchCodingQuestionsForTest(id)
+          const list = Array.isArray(data) ? data : []
+          return [id, { count: list.length, marks: list.reduce((sum, q) => sum + (Number(q.max_marks) || 0), 0) }]
+        } catch {
+          return null // a failure just leaves the previous numbers in place
+        }
+      })
+    )
+    const updates = {}
+    for (const entry of results) if (entry) updates[entry[0]] = entry[1]
+    setCodingTotals((current) => (replace ? updates : { ...current, ...updates }))
+  }, [])
+
+  useEffect(() => {
+    const ids = myTestIdsKey ? myTestIdsKey.split(',').map(Number) : []
+    loadCodingTotals(ids, true)
+  }, [myTestIdsKey, loadCodingTotals])
+
+  const refreshCodingTotal = useCallback(
+    (testId) => loadCodingTotals([Number(testId)], false),
+    [loadCodingTotals]
   )
 
   const handleCreateTest = async (testData) => {
@@ -309,6 +349,7 @@ export default function EvaluatorDashboard() {
               onSubmissions={() => setActiveTab('submissions')}
               onManageTest={setSelectedTestDetails}
               navigate={navigate}
+              codingTotals={codingTotals}
             />
           )}
           {activeTab === 'create' && (
@@ -325,6 +366,7 @@ export default function EvaluatorDashboard() {
               onCreate={() => setActiveTab('create')}
               onManageTest={setSelectedTestDetails}
               navigate={navigate}
+              codingTotals={codingTotals}
             />
           )}
           {activeTab === 'analytics' && (
@@ -332,6 +374,7 @@ export default function EvaluatorDashboard() {
               tests={myTests}
               submissions={mySubmissions}
               subjects={subjects}
+              codingTotals={codingTotals}
             />
           )}
           {activeTab === 'submissions' && (
@@ -368,6 +411,18 @@ export default function EvaluatorDashboard() {
             setSelectedTestDetails(null)
             setActiveTab('submissions')
           }}
+          onManageCodingQuestions={(t) => {
+            setSelectedTestDetails(null)
+            setCodingQuestionsTest(t)
+          }}
+          codingTotals={codingTotals}
+        />
+      )}
+      {codingQuestionsTest && (
+        <TeacherCodingQuestionsModal
+          test={codingQuestionsTest}
+          onClose={() => setCodingQuestionsTest(null)}
+          onSaved={() => refreshCodingTotal(codingQuestionsTest?.id)}
         />
       )}
       {editingTest && (
@@ -385,7 +440,7 @@ export default function EvaluatorDashboard() {
   )
 }
 
-function DashboardOverview({ me, myTests, mySubmissions, myStudents, onCreate, onSubmissions, onManageTest, navigate }) {
+function DashboardOverview({ me, myTests, mySubmissions, myStudents, onCreate, onSubmissions, onManageTest, navigate, codingTotals = {} }) {
   const liveTests = myTests.filter((t) => t.status === 'active').length
   const scheduledTests = myTests.filter((t) => t.status === 'scheduled').length
   const gradedTests = myTests.filter((t) => t.status === 'graded').length
@@ -526,7 +581,7 @@ function DashboardOverview({ me, myTests, mySubmissions, myStudents, onCreate, o
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-[9.5px] uppercase tracking-[0.12em] font-semibold" style={{ color: SLATE }}>
-                          {t.subjectId?.toUpperCase() || '—'}
+                          {String(t.subjectId ?? '').toUpperCase() || '—'}
                         </span>
                         <span
                           className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[9.5px] font-semibold"
@@ -558,11 +613,11 @@ function DashboardOverview({ me, myTests, mySubmissions, myStudents, onCreate, o
                   <div className="hidden sm:flex items-center gap-3.5 flex-shrink-0">
                     <div className="text-right">
                       <p className="font-mono text-[13px] font-semibold tabular-nums" style={{ color: INK }}>
-                        {monoNum(t.totalQuestions || 0)}
+                        {monoNum((t.totalQuestions || 0) + (codingTotals[t.id]?.count || 0))}
                         <span className="text-[10px] font-normal ml-1" style={{ color: SLATE }}>q</span>
                       </p>
                       <p className="text-[10px]" style={{ color: SLATE }}>
-                        {monoNum(t.totalMarks || 0)} marks
+                        {monoNum((t.totalMarks || 0) + (codingTotals[t.id]?.marks || 0))} marks
                       </p>
                     </div>
                     <button
@@ -621,7 +676,7 @@ function DashboardOverview({ me, myTests, mySubmissions, myStudents, onCreate, o
                   <div key={sid} className="space-y-1.5">
                     <div className="flex items-center justify-between text-[11.5px]">
                       <span className="font-medium" style={{ color: INK }}>
-                        {sid?.toUpperCase() || 'Course'}
+                        {String(sid ?? '').toUpperCase() || 'Course'}
                       </span>
                       <div className="flex items-center gap-1.5">
                         {avg >= 75 ? (
@@ -1598,7 +1653,7 @@ function CreateTestForm({ me, subjects, onPublish }) {
   )
 }
 
-function TestsList({ tests, subjects, onCreate, onManageTest, navigate }) {
+function TestsList({ tests, subjects, onCreate, onManageTest, navigate, codingTotals = {} }) {
   return (
     <div className="space-y-8">
       <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
@@ -1680,7 +1735,7 @@ function TestsList({ tests, subjects, onCreate, onManageTest, navigate }) {
                           className="text-[9.5px] uppercase tracking-[0.12em] font-semibold"
                           style={{ color: SLATE }}
                         >
-                          {subject?.code || t.subjectId?.toUpperCase() || '—'}
+                          {subject?.code || String(t.subjectId ?? '').toUpperCase() || '—'}
                         </span>
                         <span
                           className="inline-flex items-center rounded-md px-2 py-0.5 text-[9.5px] font-semibold capitalize"
@@ -1730,7 +1785,7 @@ function TestsList({ tests, subjects, onCreate, onManageTest, navigate }) {
                       Qs
                     </dt>
                     <dd className="mt-0.5 font-mono text-[14px] font-semibold tabular-nums" style={{ color: INK }}>
-                      {monoNum(t.totalQuestions || t.questionIds?.length || 0)}
+                      {monoNum((t.totalQuestions || t.questionIds?.length || 0) + (codingTotals[t.id]?.count || 0))}
                     </dd>
                   </div>
                   <div className="rounded-md p-3" style={{ background: PAPER, border: `1px solid ${HAIRLINE}` }}>
@@ -1738,7 +1793,7 @@ function TestsList({ tests, subjects, onCreate, onManageTest, navigate }) {
                       Marks
                     </dt>
                     <dd className="mt-0.5 font-mono text-[14px] font-semibold tabular-nums" style={{ color: INK }}>
-                      {monoNum(t.totalMarks || 0)}
+                      {monoNum((t.totalMarks || 0) + (codingTotals[t.id]?.marks || 0))}
                     </dd>
                   </div>
                 </dl>
@@ -1787,7 +1842,7 @@ function TestsList({ tests, subjects, onCreate, onManageTest, navigate }) {
   )
 }
 
-function AnalyticsView({ tests, submissions, subjects }) {
+function AnalyticsView({ tests, submissions, subjects, codingTotals = {} }) {
   const [range, setRange] = useState('semester')
   const gradedTests = tests.filter((t) => t.status === 'graded')
   const allAvg = gradedTests.length
@@ -1969,12 +2024,13 @@ function AnalyticsView({ tests, submissions, subjects }) {
               const avg = sub.length
                 ? Math.round(sub.reduce((a, s) => a + (s.percentage || 0), 0) / sub.length)
                 : 72
+              const totalMarksWithCoding = (t.totalMarks || 0) + (codingTotals[t.id]?.marks || 0)
               return (
                 <div key={t.id} className="space-y-1.5">
                   <div className="flex items-center justify-between text-[11.5px]">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="text-[9.5px] font-semibold uppercase tracking-wider" style={{ color: SLATE }}>
-                        {t.subjectId?.toUpperCase() || '—'}
+                        {String(t.subjectId ?? '').toUpperCase() || '—'}
                       </span>
                       <span className="font-medium truncate" style={{ color: INK }}>
                         {t.title}
@@ -1985,8 +2041,8 @@ function AnalyticsView({ tests, submissions, subjects }) {
                         className="font-mono text-[11px] font-bold tabular-nums"
                         style={{ color: SLATE }}
                       >
-                        {monoNum(t.totalMarks ? Math.round((avg / 100) * t.totalMarks) : 0)}
-                        <span className="text-[9.5px] font-normal">/{monoNum(t.totalMarks || 0)}</span>
+                        {monoNum(totalMarksWithCoding ? Math.round((avg / 100) * totalMarksWithCoding) : 0)}
+                        <span className="text-[9.5px] font-normal">/{monoNum(totalMarksWithCoding)}</span>
                       </span>
                       <span
                         className="font-mono text-[13px] font-semibold tabular-nums"
@@ -2140,7 +2196,7 @@ function SubmissionsView({ submissions, tests, students, onGrade, onResolveFlag,
         const stu = students.find((st) => st.id === s.studentId || st.id === s.student)
         const name = s.student_name || stu?.name || ''
         const roll = s.student_username || stu?.roll || ''
-        const testT = s.test_title || s.testId || ''
+        const testT = String(s.test_title || s.testId || '')
         return (
           name.toLowerCase().includes(q) ||
           roll.toLowerCase().includes(q) ||
@@ -3417,11 +3473,12 @@ function SummaryRow({ label, value, Icon, tone }) {
   )
 }
 
-function TeacherTestDetailsModal({ test, onClose, onEdit, onViewSubmissions }) {
+function TeacherTestDetailsModal({ test, onClose, onEdit, onViewSubmissions, onManageCodingQuestions, codingTotals = {} }) {
   if (!test) return null
   const questions = test.questions || []
-  const totalQuestions = questions.length || test.totalQuestions || 0
-  const totalMarks = test.totalMarks || test.total_marks || questions.reduce((acc, q) => acc + (Number(q.marks) || 0), 0)
+  const coding = codingTotals[test.id] || { count: 0, marks: 0 }
+  const totalQuestions = (questions.length || test.totalQuestions || 0) + coding.count
+  const totalMarks = (test.totalMarks || test.total_marks || questions.reduce((acc, q) => acc + (Number(q.marks) || 0), 0)) + coding.marks
   const duration = test.duration_minutes || test.duration || 30
   const isPub = Boolean(test.is_published ?? test.isPublished)
 
@@ -3607,6 +3664,13 @@ function TeacherTestDetailsModal({ test, onClose, onEdit, onViewSubmissions }) {
             Close
           </button>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => onManageCodingQuestions && onManageCodingQuestions(test)}
+              className="inline-flex items-center gap-2 px-4 py-2 text-[12px] font-semibold rounded-md"
+              style={{ background: PAPER, border: `1px solid ${HAIRLINE}`, color: INK }}
+            >
+              <FileText className="h-4 w-4" /> Coding questions
+            </button>
             <button
               onClick={() => onEdit(test)}
               className="inline-flex items-center gap-2 px-4 py-2 text-[12px] font-semibold rounded-md"
