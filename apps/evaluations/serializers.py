@@ -5,6 +5,10 @@ from apps.results.models import Result
 from apps.tests.models import Option, Question, QuestionType, Test
 
 from .models import AttemptStatus, Response, TestAttempt, TestViolation, ViolationType
+from .attempts import attempt_end_reason, finalize_if_expired, require_active_attempt
+
+
+COUNTING_VIOLATION_TYPES = {ViolationType.TAB_SWITCH, ViolationType.FULLSCREEN_EXIT}
 
 
 class TestAttemptSerializer(serializers.ModelSerializer):
@@ -41,6 +45,10 @@ class StartTestSerializer(serializers.Serializer):
         ).order_by('-started_at').first()
 
         if attempt:
+            attempt = finalize_if_expired(attempt)
+            if attempt.status not in (AttemptStatus.IN_PROGRESS, AttemptStatus.STARTED):
+                return attempt
+        if attempt:
             if client_session_id and attempt.client_session_id and attempt.client_session_id != client_session_id:
                 raise serializers.ValidationError(
                     {'client_session_id': 'Another active session already exists for this test.'}
@@ -70,8 +78,7 @@ class SaveResponseSerializer(serializers.Serializer):
         attempt = TestAttempt.objects.filter(id=attrs['attempt_id'], student=student).first()
         if not attempt:
             raise serializers.ValidationError('Invalid attempt_id.')
-        if attempt.status not in (AttemptStatus.IN_PROGRESS, AttemptStatus.STARTED):
-            raise serializers.ValidationError('Attempt is not active.')
+        require_active_attempt(attempt)
         client_session_id = (attrs.get('client_session_id') or '').strip()
         if client_session_id and attempt.client_session_id and attempt.client_session_id != client_session_id:
             raise serializers.ValidationError({'client_session_id': 'Active session mismatch.'})
@@ -84,11 +91,12 @@ class SaveResponseSerializer(serializers.Serializer):
         descriptive_text = attrs.get('descriptive_text', '')
 
         if question.question_type == QuestionType.MCQ:
-            if selected_option_id is None:
+            if 'selected_option_id' not in attrs:
                 raise serializers.ValidationError('selected_option_id is required for MCQ.')
-            option = Option.objects.filter(id=selected_option_id, question=question).first()
-            if not option:
-                raise serializers.ValidationError('Invalid selected_option_id for this question.')
+            if selected_option_id is not None:
+                option = Option.objects.filter(id=selected_option_id, question=question).first()
+                if not option:
+                    raise serializers.ValidationError('Invalid selected_option_id for this question.')
         else:
             if 'descriptive_text' not in attrs:
                 raise serializers.ValidationError('descriptive_text is required for descriptive questions.')
@@ -129,8 +137,7 @@ class SubmitTestSerializer(serializers.Serializer):
         attempt = TestAttempt.objects.filter(id=value, student=student).first()
         if not attempt:
             raise serializers.ValidationError('Invalid attempt_id.')
-        if attempt.status in (AttemptStatus.SUBMITTED, AttemptStatus.TERMINATED):
-            raise serializers.ValidationError('Attempt already submitted.')
+        require_active_attempt(attempt)
         self.context['attempt'] = attempt
         return value
 
@@ -148,6 +155,8 @@ class PendingEvaluationSerializer(serializers.ModelSerializer):
     student_email = serializers.CharField(source='student.email', read_only=True)
     student_name = serializers.SerializerMethodField()
     pending_descriptive_count = serializers.IntegerField(read_only=True)
+    violation_count = serializers.SerializerMethodField()
+    end_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = TestAttempt
@@ -161,11 +170,19 @@ class PendingEvaluationSerializer(serializers.ModelSerializer):
             'student_name',
             'submitted_at',
             'pending_descriptive_count',
+            'violation_count',
+            'end_reason',
         )
 
     def get_student_name(self, obj):
         name = f'{obj.student.first_name} {obj.student.last_name}'.strip()
         return name or obj.student.username
+
+    def get_violation_count(self, obj):
+        return obj.violations.filter(violation_type__in=COUNTING_VIOLATION_TYPES).count()
+
+    def get_end_reason(self, obj):
+        return attempt_end_reason(obj)
 
 
 class TeacherSubmissionSerializer(serializers.ModelSerializer):
@@ -179,6 +196,8 @@ class TeacherSubmissionSerializer(serializers.ModelSerializer):
     score = serializers.SerializerMethodField()
     max_score = serializers.SerializerMethodField()
     percentage = serializers.SerializerMethodField()
+    violation_count = serializers.SerializerMethodField()
+    end_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = TestAttempt
@@ -198,6 +217,8 @@ class TeacherSubmissionSerializer(serializers.ModelSerializer):
             'score',
             'max_score',
             'percentage',
+            'violation_count',
+            'end_reason',
             'answers',
         )
 
@@ -222,6 +243,12 @@ class TeacherSubmissionSerializer(serializers.ModelSerializer):
     def get_percentage(self, obj):
         result = self._result(obj)
         return result.percentage if result else None
+
+    def get_violation_count(self, obj):
+        return obj.violations.filter(violation_type__in=COUNTING_VIOLATION_TYPES).count()
+
+    def get_end_reason(self, obj):
+        return attempt_end_reason(obj)
 
     def get_answers(self, obj):
         responses = {r.question_id: r for r in obj.responses.select_related('selected_option', 'question').all()}
@@ -287,7 +314,7 @@ class GradeDescriptiveAnswerSerializer(serializers.Serializer):
 
 class LogViolationSerializer(serializers.Serializer):
     attempt_id = serializers.IntegerField()
-    violation_type = serializers.ChoiceField(choices=ViolationType.choices)
+    violation_type = serializers.CharField()
     metadata = serializers.JSONField(required=False)
     client_session_id = serializers.CharField(required=False, allow_blank=True, max_length=64)
 
@@ -295,13 +322,33 @@ class LogViolationSerializer(serializers.Serializer):
         student = self.context['request'].user
         attempt = TestAttempt.objects.filter(id=attrs['attempt_id'], student=student).select_related('test').first()
         if not attempt:
-            raise serializers.ValidationError('Invalid attempt_id.')
-        if attempt.status not in (AttemptStatus.IN_PROGRESS, AttemptStatus.STARTED):
-            raise serializers.ValidationError('Attempt is not active.')
+            raise serializers.ValidationError({
+                'attempt_id': ['Invalid attempt_id.'],
+                'code': 'attempt_not_found',
+            })
+        if attrs['violation_type'] not in ViolationType.values:
+            raise serializers.ValidationError({
+                'violation_type': ['Invalid violation type.'],
+                'code': 'invalid_violation_type',
+            })
 
         client_session_id = (attrs.get('client_session_id') or '').strip()
         if client_session_id and attempt.client_session_id and attempt.client_session_id != client_session_id:
-            raise serializers.ValidationError({'client_session_id': 'Active session mismatch.'})
+            raise serializers.ValidationError({
+                'client_session_id': ['Active session mismatch.'],
+                'code': 'session_mismatch',
+            })
+
+        import json
+        try:
+            metadata_size = len(json.dumps(attrs.get('metadata') or {}).encode('utf-8'))
+        except (TypeError, ValueError):
+            raise serializers.ValidationError({'metadata': 'Metadata must be JSON serializable.'})
+        if metadata_size > 4096:
+            raise serializers.ValidationError({
+                'metadata': ['Metadata must not exceed 4096 bytes.'],
+                'code': 'invalid_metadata',
+            })
 
         attrs['attempt'] = attempt
         return attrs
@@ -313,3 +360,17 @@ class LogViolationSerializer(serializers.Serializer):
             violation_type=validated_data['violation_type'],
             metadata=validated_data.get('metadata') or {},
         )
+
+
+class AttemptViolationSerializer(serializers.ModelSerializer):
+    type = serializers.CharField(source='violation_type', read_only=True)
+    counts = serializers.SerializerMethodField()
+    occurred_at = serializers.DateTimeField(source='timestamp', read_only=True)
+    meta = serializers.JSONField(source='metadata', read_only=True)
+
+    class Meta:
+        model = TestViolation
+        fields = ('id', 'type', 'counts', 'occurred_at', 'meta')
+
+    def get_counts(self, obj):
+        return obj.violation_type in COUNTING_VIOLATION_TYPES

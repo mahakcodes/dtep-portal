@@ -37,6 +37,7 @@ import {
 import { useAuth } from '../../context/AuthContext.jsx'
 import TeacherCodingQuestionsModal from '../../components/coding/TeacherCodingQuestionsModal.jsx'
 import { fetchCodingQuestionsForTest } from '../../services/codingApi.js'
+import { fetchAttemptViolations } from '../../services/api.js'
 
 const PAPER = '#FAF9F6'
 const IVORY = '#F2F0EA'
@@ -2180,6 +2181,21 @@ function SubmissionsView({ submissions, tests, students, onGrade, onResolveFlag,
   const [search, setSearch] = useState('')
   const [gradeModal, setGradeModal] = useState(null)
   const [resolveModal, setResolveModal] = useState(null)
+  const [violationModal, setViolationModal] = useState(null)
+  const [violationLoading, setViolationLoading] = useState(false)
+
+  const openViolations = async (submission) => {
+    setViolationModal({ submission, events: [] })
+    setViolationLoading(true)
+    try {
+      const events = await fetchAttemptViolations(submission.id)
+      setViolationModal({ submission, events })
+    } catch {
+      setViolationModal({ submission, events: [], error: 'Could not load violation history.' })
+    } finally {
+      setViolationLoading(false)
+    }
+  }
 
   const filtered = useMemo(() => {
     let list = [...submissions]
@@ -2371,6 +2387,9 @@ function SubmissionsView({ submissions, tests, students, onGrade, onResolveFlag,
                         <p className="text-[12px] font-medium truncate" style={{ color: INK }}>
                           {s.test_title || s.testId}
                         </p>
+                        <p className="mt-1 text-[10px]" style={{ color: SLATE }}>
+                          Violations {s.violation_count ?? 0}{s.end_reason ? ` · ended: ${s.end_reason}` : ''}
+                        </p>
                         {s.flags && s.flags.length > 0 && (
                           <div className="mt-1 flex flex-wrap gap-1">
                             {s.flags.map((f) => (
@@ -2469,6 +2488,14 @@ function SubmissionsView({ submissions, tests, students, onGrade, onResolveFlag,
                             </button>
                           ))}
                         <button
+                          onClick={() => openViolations(s)}
+                          className="inline-flex h-8 items-center gap-1 rounded-md px-2 text-[10px] font-semibold"
+                          style={{ color: s.violation_count ? ERROR : SLATE, border: `1px solid ${HAIRLINE}` }}
+                          title="View violation timeline"
+                        >
+                          <AlertCircle className="h-3.5 w-3.5" /> Events
+                        </button>
+                        <button
                           onClick={() => navigate(`/result/${s.id}`)}
                           className="h-8 w-8 inline-flex items-center justify-center rounded-md transition-colors"
                           style={{ color: SLATE }}
@@ -2519,6 +2546,43 @@ function SubmissionsView({ submissions, tests, students, onGrade, onResolveFlag,
             setResolveModal(null)
           }}
         />
+      )}
+      {violationModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0" style={{ background: `${INK}55` }} onClick={() => setViolationModal(null)} />
+          <div className="relative max-h-[85vh] w-full max-w-xl overflow-auto rounded-md p-6" style={{ background: PAPER, border: `1px solid ${HAIRLINE}` }}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="font-serif text-xl font-semibold" style={{ color: INK }}>Anti-cheating timeline</h2>
+                <p className="mt-1 text-xs" style={{ color: SLATE }}>
+                  {violationModal.submission.student_username || violationModal.submission.student_name} · {violationModal.submission.test_title}
+                </p>
+                <p className="mt-1 text-xs font-semibold" style={{ color: ERROR }}>
+                  {violationModal.submission.violation_count ?? 0} counting events · End reason: {violationModal.submission.end_reason || 'active'}
+                </p>
+              </div>
+              <button onClick={() => setViolationModal(null)} aria-label="Close violation timeline"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="mt-5">
+              {violationLoading ? <p className="text-sm" style={{ color: SLATE }}>Loading events…</p>
+                : violationModal.error ? <p className="text-sm text-rose-700">{violationModal.error}</p>
+                  : violationModal.events.length === 0 ? <p className="text-sm" style={{ color: SLATE }}>No violation events recorded.</p>
+                    : <ol className="space-y-3 border-l pl-4" style={{ borderColor: HAIRLINE }}>
+                      {violationModal.events.map((event) => (
+                        <li key={event.id} className="relative rounded-md p-3" style={{ background: IVORY }}>
+                          <span className="absolute -left-[1.35rem] top-4 h-2 w-2 rounded-full" style={{ background: event.counts ? ERROR : BRASS }} />
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-xs font-semibold" style={{ color: INK }}>{event.type.replaceAll('_', ' ')}</span>
+                            <span className="text-[10px]" style={{ color: SLATE }}>{event.counts ? 'Counting' : 'Informational'}</span>
+                          </div>
+                          <p className="mt-1 text-[10px] font-mono" style={{ color: SLATE }}>{new Date(event.occurred_at).toLocaleString()}</p>
+                          {event.meta?.action && <p className="mt-1 text-[10px]" style={{ color: SLATE }}>Action: {event.meta.action}</p>}
+                        </li>
+                      ))}
+                    </ol>}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

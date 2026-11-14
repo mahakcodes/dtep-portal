@@ -9,26 +9,23 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
-  Shield,
   FileText,
-  HelpCircle,
   Send,
   Eraser,
-  Save,
-  Info,
   Trophy,
   Check,
-  AlertOctagon,
   Loader2,
   Maximize2,
   MonitorOff,
   Bookmark,
   BookmarkCheck,
 } from 'lucide-react'
-import { fetchTestDetails, submitTest, startTest } from '../../services/api.js'
+import { fetchAttemptClock, fetchTestDetails, saveResponse, submitTest, startTest } from '../../services/api.js'
 import { fetchCodingQuestionsForTest, describeCodingError } from '../../services/codingApi.js'
 import { disposeRunners } from '../../lib/codeRunner.js'
 import CodingQuestionPanel from '../../components/coding/CodingQuestionPanel.jsx'
+import useAntiCheat from '../../features/antiCheat/useAntiCheat.js'
+import { decideInternalPaste } from '../../features/antiCheat/logic.js'
 
 function formatTime(sec) {
   const m = Math.floor(sec / 60)
@@ -37,7 +34,18 @@ function formatTime(sec) {
   return `${pad(m)}:${pad(s)}`
 }
 
-const MAX_VIOLATIONS = 3
+function storageGet(key) {
+  try { return window.localStorage.getItem(key) } catch { return null }
+}
+
+function storageSet(key, value) {
+  try { window.localStorage.setItem(key, value) } catch { /* best-effort restore */ }
+}
+
+function storageRemove(key) {
+  try { window.localStorage.removeItem(key) } catch { /* best-effort cleanup */ }
+}
+
 const PAPER = '#FAF9F6'
 const IVORY = '#F2F0EA'
 const INK = '#161A22'
@@ -48,86 +56,6 @@ const BRASS = '#A8823A'
 const ERROR = '#8C3A2E'
 const SUCCESS = '#4B6B3A'
 
-const MOCK_TEST_LIBRARY = {
-  t_cs301_mid: {
-    id: 't_cs301_mid',
-    title: 'Midterm Examination: Data Structures & Algorithms',
-    description: 'Offline mock test for UI verification. Includes both MCQ and Descriptive questions.',
-    duration_minutes: 30,
-    totalMarks: 30,
-    questions: [
-      {
-        id: 'q1',
-        number: 1,
-        text: 'Which traversal visits the current node before its children?',
-        question_type: 'MCQ',
-        options: [
-          { id: 'o1', text: 'Post-order' },
-          { id: 'o2', text: 'In-order' },
-          { id: 'o3', text: 'Pre-order' },
-          { id: 'o4', text: 'Level-order' },
-        ],
-        correct_option_id: 'o3',
-        marks: 2,
-      },
-      {
-        id: 'q2',
-        number: 2,
-        text: 'Explain the difference between Stack and Queue data structures in detail.',
-        question_type: 'DESCRIPTIVE',
-        marks: 5,
-      },
-      {
-        id: 'q3',
-        number: 3,
-        text: 'What is the average time complexity of a hash table lookup?',
-        question_type: 'MCQ',
-        options: [
-          { id: 'o9', text: 'O(1)' },
-          { id: 'o10', text: 'O(log n)' },
-          { id: 'o11', text: 'O(n)' },
-          { id: 'o12', text: 'O(n²)' },
-        ],
-        correct_option_id: 'o9',
-        marks: 3,
-      },
-    ],
-    instructions: ['All questions compulsory.', 'Do not leave the full-screen window.'],
-  },
-}
-
-function getMockTestData(testId) {
-  return MOCK_TEST_LIBRARY[testId] || {
-    id: testId,
-    title: 'Offline Practice Test',
-    description: 'A local mock assessment used while the API is unavailable.',
-    duration_minutes: 20,
-    totalMarks: 20,
-    questions: [
-      {
-        id: 'q1',
-        number: 1,
-        text: 'Write a short note on database indexing and its importance.',
-        question_type: 'DESCRIPTIVE',
-        marks: 5,
-      },
-      {
-        id: 'q2',
-        number: 2,
-        text: 'Which option correctly represents a safe, local offline test flow?',
-        question_type: 'MCQ',
-        options: [
-          { id: 'o1', text: 'Use mock data and keep navigation active' },
-          { id: 'o2', text: 'Show an error and stop' },
-        ],
-        correct_option_id: 'o1',
-        marks: 2,
-      },
-    ],
-    instructions: ['Local fallback mode is active.'],
-  }
-}
-
 export default function TakeTest() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -135,10 +63,10 @@ export default function TakeTest() {
   const [loading, setLoading] = useState(true)
   const [testData, setTestData] = useState(null)
   const [error, setError] = useState(null)
+  const [retryKey, setRetryKey] = useState(0)
 
   const [showRules, setShowRules] = useState(true)
   const [started, setStarted] = useState(false)
-  const [secondsLeft, setSecondsLeft] = useState(0)
   const [startTime, setStartTime] = useState(null)
   const [currentIdx, setCurrentIdx] = useState(0)
   const [responses, setResponses] = useState({})
@@ -146,21 +74,50 @@ export default function TakeTest() {
   const [bookmarks, setBookmarks] = useState({})
   const [showSubmit, setShowSubmit] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [warnLow, setWarnLow] = useState(false)
 
-  const [violations, setViolations] = useState(0)
-  const [showViolationModal, setShowViolationModal] = useState(false)
-  const [violationMessage, setViolationMessage] = useState('')
-  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [showFullscreenOverlay, setShowFullscreenOverlay] = useState(false)
+  const [showTerminated, setShowTerminated] = useState(false)
+  const [deviceMessage, setDeviceMessage] = useState('')
 
   // Coding questions share this attempt, timer and violation counter.
   const [codingQuestions, setCodingQuestions] = useState([])
   const [codingError, setCodingError] = useState('')
   const [attemptId, setAttemptId] = useState(null)
+  const [clientSessionId, setClientSessionId] = useState('')
   const [codingStatus, setCodingStatus] = useState({})
 
-  const timerRef = useRef(null)
   const containerRef = useRef(null)
+  const textareaClipboardRef = useRef({ owner: null, text: '' })
+  const autoSubmitRef = useRef(false)
+  const pendingResponseSavesRef = useRef(new Map())
+  const [saveRevision, setSaveRevision] = useState(0)
+
+  const showFinalResult = useCallback(() => {
+    if (!attemptId) return
+    storageRemove(`dtep_active_test_attempt:${id}`)
+    storageRemove(`dtep_test_state_v1:${attemptId}`)
+    navigate(`/result/${attemptId}`)
+  }, [attemptId, id, navigate])
+  const showTerminationResult = useCallback(() => {
+    setShowTerminated(true)
+    window.setTimeout(() => {
+      if (attemptId) {
+        storageRemove(`dtep_active_test_attempt:${id}`)
+        storageRemove(`dtep_test_state_v1:${attemptId}`)
+        navigate(`/result/${attemptId}`)
+      }
+    }, 1800)
+  }, [attemptId, id, navigate])
+  const antiCheat = useAntiCheat({
+    attemptId,
+    active: started && !submitting,
+    clientSessionId,
+    containerRef,
+    onTerminated: showTerminationResult,
+    onFinalized: showFinalResult,
+  })
+  const secondsLeft = antiCheat.remainingSeconds ?? 0
+  const isFullscreen = antiCheat.isFullscreen
 
   useEffect(() => {
     let mounted = true
@@ -170,15 +127,12 @@ export default function TakeTest() {
         const data = await fetchTestDetails(id)
         if (mounted) {
           setTestData(data)
-          setSecondsLeft((data.duration_minutes || 30) * 60)
           setError(null)
         }
       } catch (err) {
-        const fallback = getMockTestData(id)
         if (mounted) {
-          setTestData(fallback)
-          setSecondsLeft((fallback.duration_minutes || 30) * 60)
-          setError(null)
+          setTestData(null)
+          setError(err.response?.data?.detail || 'The test could not be loaded. Check your connection and retry.')
         }
       } finally {
         if (mounted) setLoading(false)
@@ -187,10 +141,11 @@ export default function TakeTest() {
     return () => {
       mounted = false
     }
-  }, [id])
+  }, [id, retryKey])
 
-  // Coding questions live in their own resource. Never mocked: any failure is shown.
+  // Coding questions live in their own resource and share the test attempt.
   useEffect(() => {
+    if (!testData) return undefined
     let mounted = true
     ;(async () => {
       try {
@@ -199,13 +154,6 @@ export default function TakeTest() {
         const items = Array.isArray(list) ? list : []
         setCodingQuestions(items)
         setCodingError('')
-        if (items.length) {
-          // startTest is idempotent, so re-opening the page reuses the active attempt.
-          const attempt = await startTest({ test_id: id })
-          if (!mounted) return
-          setAttemptId(attempt?.id ?? null)
-          if (!attempt?.id) setCodingError('We could not start a graded attempt for this test.')
-        }
       } catch (err) {
         if (!mounted) return
         // 404 means the test has no coding questions available to this student.
@@ -219,88 +167,68 @@ export default function TakeTest() {
     return () => {
       mounted = false
     }
-  }, [id])
+  }, [id, testData])
+
+  // Restore an attempt only when this browser has already recorded its id.
+  // There is no student-facing response-read endpoint for server autosaves.
+  useEffect(() => {
+    if (!testData) return undefined
+    const activeAttemptKey = `dtep_active_test_attempt:${id}`
+    const savedStatePrefix = 'dtep_test_state_v1:'
+    const stored = storageGet(activeAttemptKey)
+    if (!stored) return undefined
+    let activeAttempt
+    try {
+      activeAttempt = JSON.parse(stored)
+    } catch {
+      activeAttempt = { id: stored, client_session_id: '' }
+    }
+    if (!activeAttempt?.id) return undefined
+    let mounted = true
+    ;(async () => {
+      try {
+        const clock = await fetchAttemptClock(activeAttempt.id)
+        if (!mounted) return
+        if (clock.status === 'TERMINATED' || clock.status === 'SUBMITTED') {
+          storageRemove(activeAttemptKey)
+          navigate(`/result/${activeAttempt.id}`)
+          return
+        }
+        setAttemptId(activeAttempt.id)
+        setClientSessionId(activeAttempt.client_session_id || '')
+        const saved = storageGet(`${savedStatePrefix}${activeAttempt.id}`)
+        if (saved) {
+          const state = JSON.parse(saved)
+          setResponses(state.responses || {})
+          setCurrentIdx(Number.isInteger(state.currentIdx) ? state.currentIdx : 0)
+          setBookmarks(state.bookmarks || {})
+          setVisited(state.visited || {})
+        }
+        setStartTime(Date.parse(activeAttempt.started_at) || Date.now())
+        setStarted(true)
+        setShowRules(false)
+        setShowFullscreenOverlay(true)
+      } catch {
+        if (mounted) storageRemove(activeAttemptKey)
+      }
+    })()
+    return () => { mounted = false }
+  }, [id, testData, navigate])
 
   // Terminate the code runners when leaving the test.
   useEffect(() => () => disposeRunners(), [])
-
-  const registerViolation = useCallback((message) => {
-    setViolations((prev) => {
-      const next = prev + 1
-      setViolationMessage(message)
-      setShowViolationModal(true)
-      if (next >= MAX_VIOLATIONS) {
-        setTimeout(() => {
-          handleForceSubmit(true)
-        }, 2000)
-      }
-      return next
-    })
-  }, [])
-
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.hidden && started && !submitting) {
-        registerViolation('Tab switch detected. Focus must remain on the test window.')
-      }
-    }
-    const handleContextMenu = (e) => {
-      if (started) {
-        e.preventDefault()
-        registerViolation('Right-click is not permitted during the test.')
-      }
-    }
-    const handleCopy = (e) => {
-      if (started) {
-        e.preventDefault()
-        registerViolation('Copying content is not allowed during the test.')
-      }
-    }
-    const handlePaste = (e) => {
-      if (started) {
-        e.preventDefault()
-        registerViolation('Pasting content is not allowed during the test.')
-      }
-    }
-    const handleCut = (e) => {
-      if (started) {
-        e.preventDefault()
-        registerViolation('Cutting content is not allowed during the test.')
-      }
-    }
-    const handleFullscreenChange = () => {
-      const fs = !!(document.fullscreenElement || document.webkitFullscreenElement)
-      setIsFullscreen(fs)
-      if (started && !fs && !submitting) {
-        registerViolation('Full-screen mode was exited. Please remain in full-screen.')
-      }
-    }
-
-    document.addEventListener('visibilitychange', handleVisibility)
-    document.addEventListener('contextmenu', handleContextMenu)
-    document.addEventListener('copy', handleCopy)
-    document.addEventListener('paste', handlePaste)
-    document.addEventListener('cut', handleCut)
-    document.addEventListener('fullscreenchange', handleFullscreenChange)
-    document.addEventListener('webkitfullscreenchange', handleFullscreenChange)
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibility)
-      document.removeEventListener('contextmenu', handleContextMenu)
-      document.removeEventListener('copy', handleCopy)
-      document.removeEventListener('paste', handlePaste)
-      document.removeEventListener('cut', handleCut)
-      document.removeEventListener('fullscreenchange', handleFullscreenChange)
-      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange)
-    }
-  }, [started, submitting, registerViolation])
 
   const requestFullscreen = async () => {
     const el = containerRef.current || document.documentElement
     try {
       if (el.requestFullscreen) await el.requestFullscreen()
       else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen()
-    } catch (_) {}
+      else return false
+      const entered = Boolean(document.fullscreenElement || document.webkitFullscreenElement)
+      return entered
+    } catch (_) {
+      return false
+    }
   }
 
   const exitFullscreen = async () => {
@@ -311,26 +239,56 @@ export default function TakeTest() {
   }
 
   const beginTest = async () => {
-    setShowRules(false)
-    setStarted(true)
-    setStartTime(Date.now())
-    setVisited({ 0: true })
-    try {
-      await requestFullscreen()
-    } catch (_) {}
-  }
+    const el = containerRef.current || document.documentElement
+    const canFullscreen = Boolean(el.requestFullscreen || el.webkitRequestFullscreen)
+    const desktop = window.innerWidth >= 768 && (!window.matchMedia || window.matchMedia('(pointer: fine)').matches)
+    if (!desktop || !canFullscreen) {
+      setDeviceMessage('Please use a desktop browser with fullscreen support to take this test.')
+      return
+    }
+    const entered = await requestFullscreen()
+    if (!entered) {
+      setDeviceMessage('Fullscreen is required to start. Allow fullscreen access and try again.')
+      return
+    }
+    setDeviceMessage('')
 
-  useEffect(() => {
-    if (started && secondsLeft > 0 && !submitting) {
-      timerRef.current = setTimeout(() => setSecondsLeft((s) => s - 1), 1000)
+    try {
+      let attempt
+      if (attemptId) {
+        const clock = await fetchAttemptClock(attemptId)
+        if (clock.status === 'TERMINATED' || clock.status === 'SUBMITTED') {
+          navigate(`/result/${attemptId}`)
+          return
+        }
+        attempt = { id: attemptId, started_at: startTime, client_session_id: clientSessionId }
+      } else {
+        const sessionId = globalThis.crypto?.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(16).slice(2)}`
+        attempt = await startTest({ test_id: id, client_session_id: sessionId })
+        if (!attempt?.id) throw new Error('Attempt could not be started.')
+        if (attempt.status === 'TERMINATED' || attempt.status === 'SUBMITTED') {
+          navigate(`/result/${attempt.id}`)
+          return
+        }
+        setAttemptId(attempt.id)
+        setClientSessionId(attempt.client_session_id || sessionId)
+        storageSet(`dtep_active_test_attempt:${id}`, JSON.stringify({
+          id: attempt.id,
+          started_at: attempt.started_at,
+          client_session_id: attempt.client_session_id || sessionId,
+        }))
+        setVisited({ 0: true })
+      }
+      setStartTime(typeof attempt.started_at === 'number'
+        ? attempt.started_at
+        : (Date.parse(attempt.started_at) || Date.now()))
+      setStarted(true)
+      setShowRules(false)
+      setShowFullscreenOverlay(false)
+    } catch (err) {
+      setDeviceMessage(err.response?.data?.detail || 'Could not start the test. Check your connection and retry.')
     }
-    if (started && secondsLeft === 0 && !submitting) {
-      handleForceSubmit(false)
-    }
-    const warnAt = Math.max(60, Math.floor((testData?.duration_minutes || 30) * 60 * 0.1))
-    if (started && secondsLeft === warnAt && !warnLow) setWarnLow(true)
-    return () => clearTimeout(timerRef.current)
-  }, [started, secondsLeft, submitting, warnLow, testData])
+  }
 
   const questions = testData?.questions || []
   // Coding questions are appended after the test's own questions so the palette,
@@ -364,20 +322,106 @@ export default function TakeTest() {
     : { color: FOREST, background: '#EBF1EC', borderColor: '#C9D9D0' }
   const toneNum = secondsLeft < 300 ? { color: ERROR } : secondsLeft < 600 ? { color: BRASS } : { color: INK }
 
+  const queueResponseSave = (questionId, value, isDescriptive) => {
+    pendingResponseSavesRef.current.set(questionId, { questionId, value, isDescriptive })
+    setSaveRevision((revision) => revision + 1)
+  }
+
+  useEffect(() => {
+    if (!attemptId || !started) return
+    try {
+      storageSet(`dtep_test_state_v1:${attemptId}`, JSON.stringify({
+        responses, currentIdx, bookmarks, visited,
+      }))
+    } catch {
+      // Browser restoration is best-effort when storage is unavailable.
+    }
+  }, [attemptId, started, responses, currentIdx, bookmarks, visited])
+
+  useEffect(() => {
+    if (!attemptId || !started || submitting || pendingResponseSavesRef.current.size === 0) return undefined
+    const timer = window.setTimeout(async () => {
+      const pending = [...pendingResponseSavesRef.current.values()]
+      pendingResponseSavesRef.current.clear()
+      for (let index = 0; index < pending.length; index += 1) {
+        const item = pending[index]
+        try {
+          await saveResponse({
+            attempt_id: attemptId,
+            question_id: item.questionId,
+            selected_option_id: item.isDescriptive ? null : item.value,
+            descriptive_text: item.isDescriptive ? item.value : undefined,
+            client_session_id: clientSessionId,
+          })
+        } catch (err) {
+          const code = err.response?.data?.code
+          if (code === 'attempt_terminated') showTerminationResult()
+          else if (code === 'attempt_finalized' || code === 'attempt_expired') showFinalResult()
+        }
+        if (index < pending.length - 1) await new Promise((resolve) => window.setTimeout(resolve, 1100))
+      }
+    }, 1200)
+    return () => window.clearTimeout(timer)
+  }, [attemptId, started, submitting, clientSessionId, saveRevision, showFinalResult, showTerminationResult])
+
   const selectOption = (optionId) => {
     if (!q) return
-    setResponses((prev) => ({ ...prev, [q.id]: prev[q.id] === optionId ? null : optionId }))
+    const value = responses[q.id] === optionId ? null : optionId
+    setResponses((prev) => ({ ...prev, [q.id]: value }))
+    queueResponseSave(q.id, value, false)
   }
 
   const handleTextChange = (e) => {
     if (!q) return
     const text = e.target.value
     setResponses((prev) => ({ ...prev, [q.id]: text }))
+    queueResponseSave(q.id, text, true)
+  }
+
+  const reportRestrictedAction = (action) => {
+    const labels = { copy: 'Copy', cut: 'Cut', paste: 'Paste', contextmenu: 'Right-click', drag: 'Dragging' }
+    antiCheat.showToast(`${labels[action] || action} is disabled during the test.`)
+    antiCheat.queueEvent('COPY_PASTE', { action })
+  }
+
+  const handleTextareaClipboard = (event, action) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const target = event.currentTarget
+    const value = String(responses[q?.id] || '')
+    const start = target.selectionStart ?? 0
+    const end = target.selectionEnd ?? start
+    reportRestrictedAction(action)
+
+    if (action === 'copy' || action === 'cut') {
+      textareaClipboardRef.current = { owner: target, text: value.slice(start, end) }
+      if (action === 'cut' && end > start) {
+        const next = `${value.slice(0, start)}${value.slice(end)}`
+        setResponses((prev) => ({ ...prev, [q.id]: next }))
+        queueResponseSave(q.id, next, true)
+      }
+      return
+    }
+
+    const decision = decideInternalPaste({
+      owner: textareaClipboardRef.current.owner,
+      target,
+      internalText: textareaClipboardRef.current.text,
+    })
+    if (!decision.allowed) return
+    const next = `${value.slice(0, start)}${decision.text}${value.slice(end)}`
+    setResponses((prev) => ({ ...prev, [q.id]: next }))
+    queueResponseSave(q.id, next, true)
+    window.setTimeout(() => {
+      target.focus()
+      target.setSelectionRange(start + decision.text.length, start + decision.text.length)
+    }, 0)
   }
 
   const clearResponse = () => {
     if (!q) return
     setResponses((prev) => ({ ...prev, [q.id]: null }))
+    queueResponseSave(q.id, null, isCurrentDescriptive)
   }
 
   const toggleBookmark = () => {
@@ -405,7 +449,7 @@ export default function TakeTest() {
   }
 
   const getTimeTaken = () => {
-    if (!startTime) return (testData?.duration_minutes || 30) * 60 - secondsLeft
+    if (!startTime) return 0
     return Math.floor((Date.now() - startTime) / 1000)
   }
 
@@ -431,40 +475,54 @@ export default function TakeTest() {
       })
   }
 
+  const submitWithRetry = async () => {
+    const payload = { time_taken_seconds: getTimeTaken(), answers: buildAnswersPayload() }
+    let lastError
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        const result = await submitTest(id, payload)
+        storageRemove(`dtep_active_test_attempt:${id}`)
+        storageRemove(`dtep_test_state_v1:${attemptId}`)
+        await exitFullscreen()
+        navigate(`/result/${result.submission_id}`)
+        return
+      } catch (err) {
+        const code = err.response?.data?.code
+        if (['attempt_finalized', 'attempt_terminated', 'attempt_expired'].includes(code)) {
+          storageRemove(`dtep_active_test_attempt:${id}`)
+          storageRemove(`dtep_test_state_v1:${attemptId}`)
+          await exitFullscreen()
+          navigate(`/result/${attemptId}`)
+          return
+        }
+        lastError = err
+        if (attempt < 4) await new Promise((resolve) => window.setTimeout(resolve, Math.min(4000, 500 * (2 ** attempt))))
+      }
+    }
+    throw lastError
+  }
+
   const handleForceSubmit = async () => {
-    clearTimeout(timerRef.current)
+    if (submitting) return
     setSubmitting(true)
     try {
-      const payload = {
-        time_taken_seconds: getTimeTaken(),
-        answers: buildAnswersPayload(),
-      }
-      const result = await submitTest(id, payload)
-      await exitFullscreen()
-      navigate(`/result/${result.submission_id}`)
+      await submitWithRetry()
     } catch (err) {
-      alert(err.response?.data?.detail || 'Submission failed. Please try again.')
+      alert(err.response?.data?.detail || 'Submission failed. Check your connection and try again.')
       setSubmitting(false)
     }
   }
 
   const confirmSubmit = async () => {
-    clearTimeout(timerRef.current)
     setShowSubmit(false)
-    setSubmitting(true)
-    try {
-      const payload = {
-        time_taken_seconds: getTimeTaken(),
-        answers: buildAnswersPayload(),
-      }
-      const result = await submitTest(id, payload)
-      await exitFullscreen()
-      navigate(`/result/${result.submission_id}`)
-    } catch (err) {
-      alert(err.response?.data?.detail || 'Submission failed. Please try again.')
-      setSubmitting(false)
-    }
+    await handleForceSubmit()
   }
+
+  useEffect(() => {
+    if (antiCheat.remainingSeconds !== 0 || !antiCheat.deadline || !started || submitting || autoSubmitRef.current) return
+    autoSubmitRef.current = true
+    void handleForceSubmit()
+  }, [antiCheat.remainingSeconds, antiCheat.deadline, started, submitting])
 
   if (loading) {
     return (
@@ -486,12 +544,13 @@ export default function TakeTest() {
           </div>
           <h2 className="mt-5 text-2xl font-semibold" style={{ color: INK }}>Unable to load test</h2>
           <p className="mt-2 text-sm" style={{ color: SLATE }}>{error}</p>
-          <button
-            onClick={() => navigate('/student')}
+          <button onClick={() => { setError(null); setLoading(true); setRetryKey((value) => value + 1) }}
             className="mt-6 inline-flex items-center gap-2 rounded-md px-5 py-3 text-sm font-semibold"
-            style={{ backgroundColor: FOREST, color: PAPER }}
-          >
-            <ArrowLeft className="h-4 w-4" /> Return to dashboard
+            style={{ backgroundColor: FOREST, color: PAPER }}>
+            <Loader2 className="h-4 w-4" /> Retry loading test
+          </button>
+          <button onClick={() => navigate('/student')} className="mt-4 block w-full text-sm" style={{ color: SLATE }}>
+            <ArrowLeft className="mr-1 inline h-4 w-4" /> Return to dashboard
           </button>
         </div>
       </div>
@@ -525,7 +584,9 @@ export default function TakeTest() {
                       <Clock className="h-4.5 w-4.5" strokeWidth={1.75} />
                     </div>
                     <p className="mt-3 text-[10px] uppercase tracking-wider font-semibold text-charcoal-50">Duration</p>
-                    <p className="mt-1 font-serif text-xl font-semibold text-charcoal-300">{testData.duration_minutes}<span className="text-[11px] text-charcoal-50 ml-1">min</span></p>
+                    <p className="mt-1 font-serif text-xl font-semibold text-charcoal-300">
+                      {Number(testData.duration_minutes) > 0 ? <>{testData.duration_minutes}<span className="text-[11px] text-charcoal-50 ml-1">min</span></> : 'No deadline'}
+                    </p>
                   </div>
                   <div className="rounded-3xl bg-cream-100 p-4 text-center">
                     <div className="flex h-9 w-9 mx-auto items-center justify-center rounded-xl bg-white text-olive-500">
@@ -549,7 +610,7 @@ export default function TakeTest() {
                     <li>Full-screen mode is <span className="font-semibold text-charcoal-300">required</span> throughout the test.</li>
                     <li>Switching tabs, minimizing, or exiting full-screen counts as a violation.</li>
                     <li>Right-click, copy, paste, and cut actions are <span className="font-semibold text-charcoal-300">disabled</span>.</li>
-                    <li>3 violations will trigger <span className="font-semibold text-terracotta-400">auto-submission</span> of your test.</li>
+                    <li>Reaching the server's limit for tab switches and fullscreen exits terminates the attempt. Copy and paste restrictions are recorded but do not count.</li>
                   </ol>
                 </div>
 
@@ -569,6 +630,7 @@ export default function TakeTest() {
                     Cancel &amp; return later
                   </button>
                 </div>
+                {deviceMessage && <p role="alert" className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{deviceMessage}</p>}
               </div>
             </div>
 
@@ -625,18 +687,18 @@ export default function TakeTest() {
             </div>
           </div>
 
-          <div className={`order-last inline-flex w-full items-center justify-center gap-2 rounded-full border px-3 py-1.5 font-medium shadow-soft-sm sm:order-none sm:w-auto sm:gap-2.5 sm:px-4 sm:py-2 ${toneWarn}`}>
+          {antiCheat.remainingSeconds !== null && <div className={`order-last inline-flex w-full items-center justify-center gap-2 rounded-full border px-3 py-1.5 font-medium shadow-soft-sm sm:order-none sm:w-auto sm:gap-2.5 sm:px-4 sm:py-2 ${toneWarn}`}>
             <Clock className="h-4 w-4" strokeWidth={1.75} />
             <span className="text-[11px] uppercase tracking-wider font-semibold opacity-80">Time left</span>
             <span className={`font-serif text-base font-bold tabular-nums sm:text-lg ${toneNum}`}>{formatTime(secondsLeft)}</span>
-          </div>
+          </div>}
 
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
             <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-1 text-[10px] font-bold sm:gap-1.5 sm:px-3 sm:py-1.5 sm:text-[11px] ${
-              violations >= 2 ? 'bg-terracotta-50 text-terracotta-400 border-terracotta-400/30' : violations >= 1 ? 'bg-terracotta-50/70 text-terracotta-400 border-terracotta-400/20' : 'bg-olive-50 text-olive-500 border-olive-400/20'
+              antiCheat.count >= 2 ? 'bg-terracotta-50 text-terracotta-400 border-terracotta-400/30' : antiCheat.count >= 1 ? 'bg-terracotta-50/70 text-terracotta-400 border-terracotta-400/20' : 'bg-olive-50 text-olive-500 border-olive-400/20'
             }`}>
               <MonitorOff className="h-3.5 w-3.5" strokeWidth={2} />
-              Violations {violations}/{MAX_VIOLATIONS}
+              Violations {antiCheat.count}/{antiCheat.max}
             </span>
             <button
               onClick={() => setShowSubmit(true)}
@@ -649,6 +711,10 @@ export default function TakeTest() {
           </div>
         </div>
       </header>
+
+      {antiCheat.offline && <div role="status" className="sticky top-[4.5rem] z-20 border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs font-medium text-amber-900">
+        You are offline. Anti-cheating events are queued and will be sent when the connection returns.
+      </div>}
 
       <div className={`mx-auto max-w-[1400px] grid gap-6 px-4 py-6 lg:px-8 ${
         isCurrentCoding
@@ -758,6 +824,8 @@ export default function TakeTest() {
                   questionId={q.id}
                   title={q.title}
                   maxMarks={q.max_marks}
+                  antiCheatActive={started && !submitting}
+                  onRestrictedAction={reportRestrictedAction}
                   onResult={(result) => setCodingStatus((prev) => ({ ...prev, [q.id]: result }))}
                 />
                 <div className="mt-8 flex shrink-0 items-center justify-end gap-2.5 border-t border-slate-200 pt-5 lg:mt-4 lg:pt-3">
@@ -780,7 +848,7 @@ export default function TakeTest() {
               </>
             ) : (
               <>
-                <h2 className="relative font-serif text-2xl leading-[1.35] text-charcoal-300 lg:text-[1.75rem]">
+                <h2 className="relative select-none font-serif text-2xl leading-[1.35] text-charcoal-300 lg:text-[1.75rem]">
                   {q?.text}
                 </h2>
 
@@ -799,6 +867,9 @@ export default function TakeTest() {
                     rows={8}
                     value={responses[q.id] || ''}
                     onChange={handleTextChange}
+                    onCopy={(event) => handleTextareaClipboard(event, 'copy')}
+                    onCut={(event) => handleTextareaClipboard(event, 'cut')}
+                    onPaste={(event) => handleTextareaClipboard(event, 'paste')}
                     placeholder="Type your detailed answer here..."
                     className="w-full rounded-2xl border border-slate-200 p-4 text-base text-charcoal-300 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-100 shadow-sm"
                   />
@@ -836,7 +907,7 @@ export default function TakeTest() {
                         >
                           {isSelected && <Check className="absolute inset-0 m-auto h-3.5 w-3.5" strokeWidth={3} />}
                         </span>
-                        <span className="pt-0.5 text-base leading-relaxed text-charcoal-200">
+                        <span className="select-none pt-0.5 text-base leading-relaxed text-charcoal-200">
                           {opt.text}
                         </span>
                       </button>
@@ -917,6 +988,34 @@ export default function TakeTest() {
           </div>
         </div>
       )}
+
+      {(showFullscreenOverlay || antiCheat.fullscreenExited) && !showTerminated && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/90 p-6 text-center text-white">
+          <div className="max-w-md rounded-2xl border border-white/20 bg-slate-900 p-8 shadow-2xl">
+            <MonitorOff className="mx-auto h-10 w-10 text-amber-300" />
+            <h2 className="mt-4 text-2xl font-semibold">Return to fullscreen</h2>
+            <p className="mt-2 text-sm text-slate-300">The test remains paused behind this notice until fullscreen is restored.</p>
+            <button onClick={async () => {
+              const entered = await antiCheat.reenterFullscreen()
+              if (entered) setShowFullscreenOverlay(false)
+            }} className="mt-6 rounded-xl bg-white px-5 py-3 text-sm font-semibold text-slate-900">
+              Re-enter fullscreen
+            </button>
+          </div>
+        </div>
+      )}
+      {showTerminated && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950 p-6 text-center text-white">
+          <div className="max-w-md">
+            <AlertTriangle className="mx-auto h-12 w-12 text-rose-300" />
+            <h2 className="mt-4 text-2xl font-semibold">Test terminated</h2>
+            <p className="mt-2 text-sm text-slate-300">The violation limit was reached. Opening your finalized result…</p>
+          </div>
+        </div>
+      )}
+      {antiCheat.toast && <div role="status" className="fixed bottom-5 left-1/2 z-[90] -translate-x-1/2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-xl">
+        {antiCheat.toast}
+      </div>}
     </div>
   )
 }

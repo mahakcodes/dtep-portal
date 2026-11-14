@@ -144,7 +144,9 @@ function caseTone(result, judged) {
     : { label: 'Wrong answer', cls: 'text-amber-700 bg-amber-50 border-amber-200' }
 }
 
-export default function CodingQuestionPanel({ attemptId, questionId, title, maxMarks, onResult }) {
+export default function CodingQuestionPanel({
+  attemptId, questionId, title, maxMarks, onResult, antiCheatActive = false, onRestrictedAction,
+}) {
   const draftKey = draftKeyFor(attemptId, questionId)
   const initialDraft = useMemo(() => readDraft(draftKey), [draftKey])
   const initialSizes = useMemo(() => readSizes(), [])
@@ -709,7 +711,14 @@ export default function CodingQuestionPanel({ attemptId, questionId, title, maxM
           className="shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white"
           style={{ height: 'clamp(360px, 62vh, 640px)' }}
         >
-          <CodeEditor language={language} value={code} onChange={setCode} height="100%" />
+          <CodeEditor
+            language={language}
+            value={code}
+            onChange={setCode}
+            height="100%"
+            antiCheatActive={antiCheatActive}
+            onRestrictedAction={onRestrictedAction}
+          />
         </div>
       </div>
     </div>
