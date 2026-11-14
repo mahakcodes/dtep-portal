@@ -316,5 +316,5 @@ See [`API_CONTRACT.md`](API_CONTRACT.md) for endpoints, request and response sha
 | **Ishita Kuntal** | [![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/ishita-kuntal-15261a349/) |
 
 <div align="center">
-<sub>Built with ❤️ by <a href="https://github.com/mahakcodes">Mahak</a> &amp; <a href="https://github.com/ishitakuntal>">Ishita</a></sub>
+<sub>Built with ❤️ by <a href="https://github.com/mahakcodes">Mahak</a> &amp; <a href="https://github.com/ishitakuntal">Ishita</a></sub>
 </div>
