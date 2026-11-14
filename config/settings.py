@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     'apps.tests.apps.TestsConfig',
     'apps.evaluations.apps.EvaluationsConfig',
     'apps.results.apps.ResultsConfig',
+    'apps.coding.apps.CodingConfig',
 ]
 
 MIDDLEWARE = [
@@ -170,6 +171,7 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'autosave': '60/min',
         'violation': '30/min',
+        'coding_submission': '30/min',
     },
 }
 
