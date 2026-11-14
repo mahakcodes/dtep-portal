@@ -2,6 +2,8 @@ from django.urls import path
 
 from .views import (
     GradeDescriptiveAnswerView,
+    AttemptClockView,
+    AttemptViolationsView,
     LogViolationView,
     PendingEvaluationsListView,
     SaveResponseView,
@@ -11,6 +13,8 @@ from .views import (
 )
 
 urlpatterns = [
+    path('attempts/<int:attempt_id>/clock/', AttemptClockView.as_view(), name='evaluations-attempt-clock'),
+    path('attempts/<int:attempt_id>/violations/', AttemptViolationsView.as_view(), name='evaluations-attempt-violations'),
     path('start/', StartTestView.as_view(), name='evaluations-start'),
     path('save-response/', SaveResponseView.as_view(), name='evaluations-save-response'),
     path('submit/', SubmitTestView.as_view(), name='evaluations-submit'),

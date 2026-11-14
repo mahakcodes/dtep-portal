@@ -21,6 +21,72 @@ Response: { "submission_id": 55, "score": 10, "total_marks": 10, "percentage": 1
 GET /api/submissions/<submission_id>/result/ (Headers: Authorization Bearer <token>)
 Response: { "submission_id": 55, "test_title": "Math Quiz", "score": 10, "total_marks": 10, "percentage": 100.0, "time_taken_seconds": 600, "details": [ { "question_id": 101, "question_text": "What is 2+2?", "user_selected_option_id": 2, "correct_option_id": 2, "is_correct": true } ] }
 
+## Anti-cheating
+
+### Report a test event
+
+`POST /api/evaluations/violations/log/` — Student only; the attempt must belong to the student. The request keeps the existing field names:
+
+```json
+{
+  "attempt_id": 55,
+  "violation_type": "TAB_SWITCH",
+  "metadata": {"source": "tab_hidden"},
+  "client_session_id": "session-abc"
+}
+```
+
+Accepted `violation_type` values are `TAB_SWITCH`, `FULLSCREEN_EXIT`, and `COPY_PASTE`. Only `TAB_SWITCH` and `FULLSCREEN_EXIT` count toward `MAX_TEST_VIOLATIONS` (default 3). `COPY_PASTE` is stored as informational and does not increment the count. For a counting event, the server ignores another stored event of the same type for the same attempt when it was stored in the previous 3 seconds. The count is computed from stored rows; a client-supplied count is not accepted. Events sent after an attempt is submitted or terminated are ignored and return `200 OK` with `terminated: true`.
+
+The response preserves the existing fields and adds `count` and `max`:
+
+```json
+{
+  "attempt_id": 55,
+  "violation_id": 810,
+  "violation_type": "TAB_SWITCH",
+  "violations_count": 1,
+  "terminated": false,
+  "status": "IN_PROGRESS",
+  "count": 1,
+  "max": 3
+}
+```
+
+When the counting threshold is reached, the server atomically marks the attempt `TERMINATED`, finalizes its `Result`, and returns `terminated: true` with `status: "TERMINATED"`. A duplicate counting event or an ignored post-finalization event has `violation_id: null`; `count` and the legacy `violations_count` report the current server count. Metadata is limited to 4096 UTF-8 bytes.
+
+Errors: `400 Bad Request` returns the existing field errors plus a machine-readable `code`: `invalid_request`, `attempt_not_found`, `invalid_violation_type`, `invalid_metadata`, or `session_mismatch`. Unauthenticated requests return `401 Unauthorized`; non-students return `403 Forbidden`; throttled requests return `429 Too Many Requests`.
+
+### Read the attempt clock and violation count
+
+`GET /api/evaluations/attempts/{attempt_id}/clock/` — Student, own attempt only. The server lazily finalizes an attempt after its deadline plus the 30-second submission grace. Duration `0` has no deadline.
+
+```json
+{
+  "server_time": "2026-11-14T12:00:00Z",
+  "deadline": "2026-11-14T12:30:00Z",
+  "remaining_seconds": 1800,
+  "status": "IN_PROGRESS",
+  "violations": {"count": 1, "max": 3}
+}
+```
+
+For duration `0`, `deadline` and `remaining_seconds` are `null`. Unknown or another student's attempt returns `404 Not Found`; non-students receive `403 Forbidden`.
+
+### Read a teacher's violation timeline
+
+`GET /api/evaluations/attempts/{attempt_id}/violations/` — Teacher/evaluator who owns the test. Returns events oldest first:
+
+```json
+[{"id": 810, "type": "TAB_SWITCH", "counts": true, "occurred_at": "2026-11-14T11:45:00Z", "meta": {"source": "tab_hidden"}}]
+```
+
+`counts` is false for informational `COPY_PASTE` events. An attempt for another teacher returns `404 Not Found`; students receive `403 Forbidden`. Teacher submission rows also include additive `violation_count` and `end_reason` fields (`terminated`, `timeout`, `submitted`, or `null`).
+
+### Attempt write errors
+
+Attempt writes reject finalized attempts with `400 Bad Request` and a machine-readable `code`: `attempt_terminated`, `attempt_finalized`, or `attempt_expired`. MCQ save and submit, coding submission, and coding grading-case access also enforce the server deadline plus 30 seconds; after that grace the server finalizes the Result. The legacy `POST /api/tests/{id}/submit/` does not create a replacement attempt when the latest attempt is finalized; it returns `attempt_finalized` or `attempt_terminated`. The same endpoint creates an attempt when the student has no attempt for that test.
+
 ## Coding questions (browser-reported grading)
 
 All endpoints require `Authorization: Bearer <token>`. An unauthenticated request returns `401 Unauthorized`, `{"detail":"Authentication credentials were not provided."}`. “Teacher” includes users with role `TEACHER` or `EVALUATOR`. Allowed languages are `python` and `javascript`. There is no server-side code execution: grading results are reported by the browser and are trust-based. The server validates attempt and case IDs, computes the weighted score from the reported per-case results, and records `graded_by: "browser"`. A student can report passing cases without actually running the code; this is not a secure sandbox judge.

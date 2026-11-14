@@ -2,7 +2,8 @@ from rest_framework import serializers
 from rest_framework.exceptions import NotFound
 from django.db import transaction
 
-from apps.evaluations.models import AttemptStatus, TestAttempt
+from apps.evaluations.models import TestAttempt
+from apps.evaluations.attempts import require_active_attempt
 from apps.tests.models import Test
 
 from .models import CodingQuestion, CodingSubmission, CodingTestCase
@@ -210,19 +211,11 @@ class CodingSubmissionCreateSerializer(CodingSubmissionInputSerializer):
         ).first()
         if not attempt:
             raise serializers.ValidationError({'attempt_id': 'Invalid attempt_id.'})
-        if attempt.status not in (AttemptStatus.IN_PROGRESS, AttemptStatus.STARTED):
-            raise serializers.ValidationError({'attempt_id': 'Attempt is not active.'})
+        require_active_attempt(attempt)
         if attempt.test_id != question.test_id:
             raise serializers.ValidationError({'attempt_id': 'This question is not part of the attempt test.'})
         if not student.assigned_teachers.filter(pk=attempt.test.created_by_id).exists():
             raise serializers.ValidationError({'attempt_id': 'This test is not assigned to you.'})
-
-        if attempt.test.duration_minutes:
-            from datetime import timedelta
-            from django.utils import timezone
-            deadline = attempt.started_at + timedelta(minutes=attempt.test.duration_minutes, seconds=30)
-            if timezone.now() > deadline:
-                raise serializers.ValidationError({'attempt_id': 'Attempt has expired.'})
 
         cases = list(question.test_cases.all().order_by('order', 'id'))
         results = attrs['case_results']
@@ -384,15 +377,8 @@ class GradingAttemptQuerySerializer(serializers.Serializer):
         attempt = TestAttempt.objects.filter(pk=value, student=request.user).select_related('test', 'test__created_by').first()
         if not attempt:
             raise serializers.ValidationError('Invalid attempt_id.')
-        if attempt.status not in (AttemptStatus.IN_PROGRESS, AttemptStatus.STARTED):
-            raise serializers.ValidationError('Attempt is not active.')
+        require_active_attempt(attempt)
         if not attempt.test.is_published or not request.user.assigned_teachers.filter(pk=attempt.test.created_by_id).exists():
             raise serializers.ValidationError('This test is not assigned to you.')
-        if attempt.test.duration_minutes:
-            from datetime import timedelta
-            from django.utils import timezone
-            deadline = attempt.started_at + timedelta(minutes=attempt.test.duration_minutes, seconds=30)
-            if timezone.now() > deadline:
-                raise serializers.ValidationError('Attempt has expired.')
         self.context['attempt'] = attempt
         return value

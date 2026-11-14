@@ -1,6 +1,11 @@
+from datetime import timedelta
+
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Count, F, Q
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -10,11 +15,17 @@ from apps.results.models import Result
 from apps.tests.models import QuestionType
 from apps.users.permissions import IsEvaluatorUserRole, IsStudentUserRole
 
-from .models import AttemptStatus, Response as ResponseModel, TestAttempt
+from .models import AttemptStatus, Response as ResponseModel, TestAttempt, TestViolation, ViolationType
 from .scoring import calculate_attempt_scores
+from .attempts import (
+    attempt_deadline,
+    finalize_if_expired,
+    write_attempt_result,
+)
 from .serializers import (
     GradeDescriptiveAnswerSerializer,
     LogViolationSerializer,
+    AttemptViolationSerializer,
     PendingEvaluationSerializer,
     ResponseSerializer,
     SaveResponseSerializer,
@@ -89,6 +100,7 @@ class PendingEvaluationsListView(APIView):
     permission_classes = (IsAuthenticated, IsEvaluatorUserRole)
 
     def get(self, request, *args, **kwargs):
+        finalize_expired_for_teacher(request.user)
         attempts = (
             TestAttempt.objects.filter(
                 status=AttemptStatus.SUBMITTED,
@@ -125,6 +137,7 @@ class TeacherSubmissionsListView(APIView):
     def get(self, request, *args, **kwargs):
         test_id = request.query_params.get('test_id')
         user = request.user
+        finalize_expired_for_teacher(user)
         attempts = (
             TestAttempt.objects.filter(
                 test__created_by=user,
@@ -204,41 +217,106 @@ class LogViolationView(APIView):
 
     def post(self, request, *args, **kwargs):
         serializer = LogViolationSerializer(data=request.data, context={'request': request})
-        serializer.is_valid(raise_exception=True)
-        violation = serializer.save()
-        attempt = serializer.validated_data['attempt']
+        if not serializer.is_valid():
+            error_data = dict(serializer.errors)
+            error_data.setdefault('code', 'invalid_request')
+            if isinstance(error_data.get('code'), (list, tuple)):
+                error_data['code'] = str(error_data['code'][0])
+            return Response(error_data, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        now = timezone.now()
+        counting_types = (ViolationType.TAB_SWITCH, ViolationType.FULLSCREEN_EXIT)
 
-        violations_count = attempt.violations.count()
-        terminated = False
-
-        if violations_count >= settings.MAX_TEST_VIOLATIONS:
-            attempt.status = AttemptStatus.TERMINATED
-            attempt.submitted_at = timezone.now()
-            attempt.save(update_fields=['status', 'submitted_at'])
-
-            scoring = calculate_attempt_scores(attempt)
-            Result.objects.update_or_create(
-                attempt=attempt,
-                defaults={
-                    'student': attempt.student,
-                    'test': attempt.test,
-                    'score': scoring['score'],
-                    'max_score': scoring['max_score'],
-                    'percentage': scoring['percentage'],
-                    'correct_answers': scoring['correct_answers'],
-                    'total_questions': scoring['total_questions'],
-                },
+        with transaction.atomic():
+            attempt = (
+                TestAttempt.objects.select_for_update()
+                .select_related('test', 'student')
+                .get(pk=data['attempt'].pk, student=request.user)
             )
-            terminated = True
+            attempt = finalize_if_expired(attempt, now=now)
+            latest_status = attempt.status
+            ignored = latest_status in (AttemptStatus.SUBMITTED, AttemptStatus.TERMINATED)
+            duplicate = False
+            violation = None
 
-        return Response(
-            {
+            if not ignored:
+                violation_type = data['violation_type']
+                if violation_type in counting_types:
+                    duplicate = attempt.violations.filter(
+                        violation_type=violation_type,
+                        timestamp__gte=now - timedelta(seconds=3),
+                    ).exists()
+                if not duplicate:
+                    violation = TestViolation.objects.create(
+                        attempt=attempt,
+                        violation_type=violation_type,
+                        metadata=data.get('metadata') or {},
+                    )
+
+                violations_count = attempt.violations.filter(violation_type__in=counting_types).count()
+                if violation_type in counting_types and violations_count >= settings.MAX_TEST_VIOLATIONS:
+                    attempt.status = AttemptStatus.TERMINATED
+                    attempt.submitted_at = now
+                    attempt.save(update_fields=['status', 'submitted_at'])
+                    write_attempt_result(attempt)
+
+            violations_count = attempt.violations.filter(violation_type__in=counting_types).count()
+            terminated = attempt.status in (AttemptStatus.SUBMITTED, AttemptStatus.TERMINATED)
+            response_data = {
                 'attempt_id': attempt.id,
-                'violation_id': violation.id,
-                'violation_type': violation.violation_type,
+                'violation_id': violation.id if violation else None,
+                'violation_type': data['violation_type'],
                 'violations_count': violations_count,
                 'terminated': terminated,
                 'status': attempt.status,
-            },
-            status=200,
+                'count': violations_count,
+                'max': settings.MAX_TEST_VIOLATIONS,
+            }
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+def finalize_expired_for_teacher(teacher):
+    expired_candidates = TestAttempt.objects.filter(
+        test__created_by=teacher,
+        student__teacher_mappings__teacher=teacher,
+        status__in=(AttemptStatus.IN_PROGRESS, AttemptStatus.STARTED),
+        test__duration_minutes__gt=0,
+    ).select_related('test', 'student').distinct()
+    for attempt in expired_candidates:
+        finalize_if_expired(attempt)
+
+
+class AttemptClockView(APIView):
+    permission_classes = (IsAuthenticated, IsStudentUserRole)
+
+    def get(self, request, attempt_id):
+        attempt = get_object_or_404(
+            TestAttempt.objects.select_related('test'), pk=attempt_id, student=request.user,
         )
+        attempt = finalize_if_expired(attempt)
+        now = timezone.now()
+        deadline = attempt_deadline(attempt)
+        remaining = None if deadline is None else max(0, int((deadline - now).total_seconds()))
+        count = attempt.violations.filter(
+            violation_type__in=(ViolationType.TAB_SWITCH, ViolationType.FULLSCREEN_EXIT),
+        ).count()
+        return Response({
+            'server_time': now.isoformat(),
+            'deadline': deadline.isoformat() if deadline else None,
+            'remaining_seconds': remaining,
+            'status': attempt.status,
+            'violations': {'count': count, 'max': settings.MAX_TEST_VIOLATIONS},
+        })
+
+
+class AttemptViolationsView(APIView):
+    permission_classes = (IsAuthenticated, IsEvaluatorUserRole)
+
+    def get(self, request, attempt_id):
+        attempt = get_object_or_404(
+            TestAttempt.objects.select_related('test'),
+            pk=attempt_id,
+            test__created_by=request.user,
+        )
+        violations = attempt.violations.order_by('timestamp', 'id')
+        return Response(AttemptViolationSerializer(violations, many=True).data)

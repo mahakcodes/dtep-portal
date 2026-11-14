@@ -10,9 +10,11 @@ from rest_framework.generics import (
 from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.exceptions import APIException
 
 from apps.evaluations.models import AttemptStatus, Response as ResponseModel, TestAttempt
 from apps.evaluations.scoring import calculate_attempt_scores
+from apps.evaluations.attempts import require_active_attempt
 from apps.results.models import Result
 from apps.users.permissions import IsStudentUserRole
 
@@ -172,19 +174,32 @@ class TestSubmitView(APIView):
         if not is_authorized:
             return Response({'detail': 'You are not authorized to submit this test.'}, status=status.HTTP_403_FORBIDDEN)
 
-        # Get or create TestAttempt
+        # Reuse the latest active attempt. A finalized latest attempt must not
+        # be silently replaced by another attempt through this legacy route.
         attempt = TestAttempt.objects.filter(
             test=test,
             student=student,
-            status__in=(AttemptStatus.IN_PROGRESS, AttemptStatus.STARTED),
-        ).order_by('-started_at').first()
-
-        if not attempt:
+        ).order_by('-started_at', '-id').first()
+        if attempt and attempt.status == AttemptStatus.TERMINATED:
+            return Response(
+                {'detail': 'Attempt was terminated.', 'code': 'attempt_terminated'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if attempt and attempt.status == AttemptStatus.SUBMITTED:
+            return Response(
+                {'detail': 'Attempt is already finalized.', 'code': 'attempt_finalized'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if attempt is None:
             attempt = TestAttempt.objects.create(
                 test=test,
                 student=student,
                 status=AttemptStatus.IN_PROGRESS,
             )
+        try:
+            attempt = require_active_attempt(attempt)
+        except APIException as exc:
+            return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
 
         # Save responses
         answers = request.data.get('answers', [])

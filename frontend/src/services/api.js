@@ -260,6 +260,16 @@ export const logViolation = async ({ attempt_id, violation_type, metadata, clien
   return response.data;
 };
 
+export const fetchAttemptClock = async (attemptId) => {
+  const response = await api.get(`/api/evaluations/attempts/${Number(attemptId)}/clock/`);
+  return response.data;
+};
+
+export const fetchAttemptViolations = async (attemptId) => {
+  const response = await api.get(`/api/evaluations/attempts/${Number(attemptId)}/violations/`);
+  return response.data;
+};
+
 // Subjects APIs
 export const fetchSubjects = async () => {
   const response = await api.get('/api/tests/subjects/');
