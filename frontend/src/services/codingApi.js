@@ -101,6 +101,8 @@ export function describeCodingError(err) {
   }
   if (status === 403) return raw || 'You do not have permission to do that.'
   if (status === 404) return 'This coding question is not available for your attempt.'
+  // Not expected on the student side, but must never crash the panel.
+  if (status === 409) return raw || 'Your submission could not be saved because the question changed. Reload the page and try again.'
   if (status >= 500) return 'The server ran into a problem. Please try again in a moment.'
   return raw || 'Something went wrong. Please try again.'
 }

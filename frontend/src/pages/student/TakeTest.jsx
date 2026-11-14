@@ -609,27 +609,30 @@ export default function TakeTest() {
   const charCount = currentText.length
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900" ref={containerRef}>
+    <div
+      className={`min-h-screen bg-slate-50 text-slate-900 ${isFullscreen ? 'h-screen overflow-y-auto' : ''}`}
+      ref={containerRef}
+    >
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur-md">
-        <div className="mx-auto flex h-18 items-center justify-between gap-4 px-5 lg:px-8">
-          <div className="flex items-center gap-3 min-w-0">
+        <div className="mx-auto flex flex-wrap items-center justify-between gap-x-2.5 gap-y-2 px-3 py-2.5 sm:h-18 sm:flex-nowrap sm:gap-4 sm:px-5 sm:py-0 lg:px-8">
+          <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 flex-shrink-0">
               <FileText className="h-4.5 w-4.5 text-white" strokeWidth={1.75} />
             </div>
             <div className="min-w-0 leading-tight">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-charcoal-50">Test #{testData.id}</p>
-              <p className="font-serif text-base font-semibold text-charcoal-300 truncate">{testData.title}</p>
+              <p className="truncate text-[11px] font-semibold uppercase tracking-[0.12em] text-charcoal-50">Test #{testData.id}</p>
+              <p className="truncate font-serif text-sm font-semibold text-charcoal-300 sm:text-base">{testData.title}</p>
             </div>
           </div>
 
-          <div className={`inline-flex items-center gap-2.5 rounded-full border px-4 py-2 font-medium shadow-soft-sm ${toneWarn}`}>
+          <div className={`order-last inline-flex w-full items-center justify-center gap-2 rounded-full border px-3 py-1.5 font-medium shadow-soft-sm sm:order-none sm:w-auto sm:gap-2.5 sm:px-4 sm:py-2 ${toneWarn}`}>
             <Clock className="h-4 w-4" strokeWidth={1.75} />
             <span className="text-[11px] uppercase tracking-wider font-semibold opacity-80">Time left</span>
-            <span className={`font-serif text-lg font-bold tabular-nums ${toneNum}`}>{formatTime(secondsLeft)}</span>
+            <span className={`font-serif text-base font-bold tabular-nums sm:text-lg ${toneNum}`}>{formatTime(secondsLeft)}</span>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-bold ${
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-1 text-[10px] font-bold sm:gap-1.5 sm:px-3 sm:py-1.5 sm:text-[11px] ${
               violations >= 2 ? 'bg-terracotta-50 text-terracotta-400 border-terracotta-400/30' : violations >= 1 ? 'bg-terracotta-50/70 text-terracotta-400 border-terracotta-400/20' : 'bg-olive-50 text-olive-500 border-olive-400/20'
             }`}>
               <MonitorOff className="h-3.5 w-3.5" strokeWidth={2} />
@@ -637,7 +640,7 @@ export default function TakeTest() {
             </span>
             <button
               onClick={() => setShowSubmit(true)}
-              className="group inline-flex items-center gap-2 rounded-full bg-charcoal-300 px-4.5 py-2.5 text-xs font-semibold text-cream-100 transition-all duration-300 hover:bg-charcoal-400 hover:shadow-soft hover:-translate-y-0.5 disabled:opacity-50"
+              className="group inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-charcoal-300 px-3 py-2 text-[11px] font-semibold text-cream-100 transition-all duration-300 hover:bg-charcoal-400 hover:shadow-soft hover:-translate-y-0.5 disabled:opacity-50 sm:gap-2 sm:px-4.5 sm:py-2.5 sm:text-xs"
               disabled={submitting}
             >
               <Send className="h-3.5 w-3.5" strokeWidth={2} />

@@ -19,6 +19,9 @@ import {
 import { fetchSubmissionResult } from '../../services/api.js'
 import { fetchCodingSubmissionsForAttempt } from '../../services/codingApi.js'
 
+// Percentage at or above which the test counts as passed (the result endpoint sends no "passed" field).
+const PASS_PERCENTAGE = 50
+
 function formatTimeTaken(sec) {
   const h = Math.floor(sec / 3600)
   const m = Math.floor((sec % 3600) / 60)
@@ -160,6 +163,17 @@ export default function TestResult() {
             <h1 className="mt-3 font-serif text-[2.5rem] leading-tight tracking-tight font-semibold text-slate-900">
               {result.test_title}
             </h1>
+            <p className="mt-2 text-sm text-slate-600 max-w-lg mx-auto">
+              {Number(result.percentage) >= PASS_PERCENTAGE ? (
+                <span className="inline-flex items-center gap-1.5 text-emerald-700 font-semibold">
+                  <CheckCircle2 className="h-4 w-4" /> Test passed
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 text-rose-700 font-semibold">
+                  <XCircle className="h-4 w-4" /> Test not passed
+                </span>
+              )}
+            </p>
 
             <div className="mt-8 grid gap-4 sm:grid-cols-4 max-w-3xl mx-auto">
               <div className="rounded-2xl bg-slate-50 p-4 text-center border border-slate-200">
@@ -384,7 +398,7 @@ export default function TestResult() {
                     <div className="flex flex-wrap items-start justify-between gap-4">
                       <div className="min-w-0">
                         <p className="text-base font-medium text-slate-900 leading-relaxed">
-                          {sub.title || `Question ${sub.question_id}`}
+                          {sub.question_title || sub.title || `Question ${sub.question_id}`}
                         </p>
                         <span className="inline-block mt-1 text-[11px] font-mono text-slate-500">
                           {`[Coding${sub.language ? ` · ${sub.language}` : ''}]`}
